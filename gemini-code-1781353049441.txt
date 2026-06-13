@@ -1,0 +1,8 @@
+streamlit
+pandas
+numpy
+pdfplumber
+textstat
+scikit-learn
+openpyxl
+plotly
