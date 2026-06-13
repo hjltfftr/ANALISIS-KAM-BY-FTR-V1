@@ -20,26 +20,25 @@ st.title("📄 KAM Analyzer (Teks & Scan PDF)")
 @st.cache_data
 def extract_text_from_pdf(file_bytes):
     text = ""
-    # 1. Coba ekstraksi teks normal dulu (lebih ringan & cepat)
+    # 1. Coba ekstraksi teks digital normal dulu
     with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
         for page in pdf.pages:
             extracted = page.extract_text()
             if extracted:
                 text += extracted + "\n"
     
-    # 2. Jika teks kosong (berarti PDF gambar/scan), gunakan OCR
+    # 2. Jika teks kosong/sangat pendek (berarti PDF gambar/scan), gunakan OCR
     if len(text.strip()) < 50:
         try:
-            # Mengubah PDF menjadi kumpulan gambar
+            # Mengubah PDF menjadi gambar di memori
             images = convert_from_bytes(file_bytes)
             
-            # Membaca teks dari gambar (Bahasa Indonesia & Inggris)
+            # Membaca teks menggunakan OCR dengan dukungan Bahasa Indonesia + Inggris
             for img in images:
-                # Jika error bahasa, hapus 'ind+' dan gunakan 'eng' saja
                 text += pytesseract.image_to_string(img, lang='ind+eng') + "\n" 
                 
         except Exception as e:
-            st.error(f"⚠️ Mode OCR gagal. Pastikan Tesseract dan Poppler terinstal di server/sistem. Detail: {e}")
+            st.error(f"⚠️ Mode OCR gagal dijalankan. Detail: {e}")
             
     return text
 
@@ -59,11 +58,13 @@ def calculate_readability(text):
 
 def calculate_similarity(texts):
     try:
+        # Tfidf Tanpa filter stop words bahasa inggris agar teks indonesia aman
         vectorizer = TfidfVectorizer() 
         tfidf_matrix = vectorizer.fit_transform(texts)
         sim_matrix = cosine_similarity(tfidf_matrix)
         return sim_matrix
     except ValueError:
+        # Mengembalikan None jika seluruh dokumen teksnya kosong/gagal OCR
         return None
 
 # --- INISIALISASI SESSION STATE ---
@@ -84,29 +85,25 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 # 1. UPLOAD PDF
 with tab1:
     st.header("Upload Dokumen KAM")
-    st.info("💡 Aplikasi ini sekarang sudah dilengkapi **Auto-OCR**. PDF berbentuk gambar/scan akan otomatis terbaca, namun prosesnya akan memakan waktu sedikit lebih lama.")
+    st.info("💡 Aplikasi ini dilengkapi sistem **Auto-OCR**. PDF hasil gambar/scan akan diproses otomatis (proses memakan waktu sedikit lebih lama).")
     
-    uploaded_files = st.file_uploader("Pilih file PDF (Disarankan halaman KAM saja)", type=['pdf'], accept_multiple_files=True)
+    uploaded_files = st.file_uploader("Pilih file PDF KAM (Disarankan halaman KAM saja)", type=['pdf'], accept_multiple_files=True)
     
     if uploaded_files:
         if st.button("Proses Dokumen"):
-            # Progress bar untuk memantau OCR jika file banyak
             progress_bar = st.progress(0)
             status_text = st.empty()
             
             for idx, file in enumerate(uploaded_files):
-                status_text.text(f"Mengekstrak teks dari: {file.name}...")
-                # Mengirimkan format bytes agar bisa dibaca oleh pdf2image
+                status_text.text(f"Memproses file ({idx+1}/{len(uploaded_files)}): {file.name}...")
                 st.session_state['documents'][file.name] = extract_text_from_pdf(file.getvalue())
-                
-                # Update progress
                 progress_bar.progress((idx + 1) / len(uploaded_files))
                 
-            status_text.text("Selesai!")
-            st.success(f"{len(uploaded_files)} dokumen berhasil diproses!")
+            status_text.text("Seluruh dokumen berhasil diproses!")
+            st.success("Selesai!")
 
     if st.session_state['documents']:
-        st.write("### Dokumen yang telah diproses:")
+        st.write("### Dokumen yang siap dianalisis:")
         for name in st.session_state['documents'].keys():
             st.markdown(f"- {name}")
 
@@ -114,7 +111,7 @@ with tab1:
 with tab2:
     st.header("Readability Analysis")
     if not st.session_state['documents']:
-        st.info("Silakan upload dan proses dokumen PDF terlebih dahulu di tab 'Upload PDF'.")
+        st.info("Silakan upload dokumen PDF terlebih dahulu di tab 'Upload PDF'.")
     else:
         if st.button("Jalankan Analisis Keterbacaan"):
             results = []
@@ -143,7 +140,7 @@ with tab3:
         sim_matrix = calculate_similarity(doc_texts)
         
         if sim_matrix is None:
-            st.error("❌ Analisis gagal. Teks kosong. Jika ini file scan, pastikan OCR berjalan dengan benar.")
+            st.error("❌ Analisis kemiripan gagal karena teks di dalam dokumen kosong atau sistem OCR belum berhasil mengekstrak karakter.")
         else:
             df_sim = pd.DataFrame(sim_matrix, index=doc_names, columns=doc_names)
             
@@ -177,9 +174,9 @@ with tab3:
 # 4. AI SUMMARY
 with tab4:
     st.header("AI Summary")
-    st.markdown("Fitur ini menggunakan **Google Gemini AI** untuk mengekstrak dan meringkas risiko audit utama dari dokumen KAM.")
+    st.markdown("Fitur ini menggunakan **Google Gemini AI** untuk mengekstrak risiko audit utama langsung dari teks KAM.")
     
-    api_key = st.text_input("🔑 Masukkan Google Gemini API Key Anda:", type="password", help="Dapatkan API key di aistudio.google.com")
+    api_key = st.text_input("🔑 Masukkan Google Gemini API Key Anda:", type="password", help="Dapatkan API key gratis di aistudio.google.com")
     
     if not st.session_state['documents']:
         st.info("Silakan upload dokumen PDF terlebih dahulu di tab 'Upload PDF'.")
@@ -188,17 +185,18 @@ with tab4:
         
         if st.button("✨ Generate Summary"):
             if not api_key:
-                st.warning("⚠️ Silakan masukkan API Key Anda terlebih dahulu sebelum meng-generate summary.")
+                st.warning("⚠️ Silakan masukkan API Key Anda terlebih dahulu.")
             else:
                 doc_text = st.session_state['documents'][selected_doc]
                 
                 if not doc_text.strip():
-                    st.error("❌ Gagal membuat ringkasan. Teks pada dokumen ini kosong.")
+                    st.error("❌ Teks dokumen kosong. AI tidak dapat membuat ringkasan.")
                 else:
-                    with st.spinner("AI sedang membaca dan menyusun ringkasan..."):
+                    with st.spinner("AI sedang menyusun ringkasan eksekutif..."):
                         try:
                             genai.configure(api_key=api_key)
-                            model = genai.GenerativeModel('gemini pro')
+                            # Menggunakan model flash terbaru yang efisien
+                            model = genai.GenerativeModel('gemini-1.5-flash')
                             
                             prompt = f"""
                             Anda adalah seorang asisten auditor senior yang ahli. 
@@ -221,13 +219,13 @@ with tab4:
                             st.info(response.text)
                             
                         except Exception as e:
-                            st.error(f"❌ Terjadi kesalahan saat menghubungi AI: {e}")
+                            st.error(f"❌ Gagal menghubungi AI. Pastikan API Key valid. Detail error: {e}")
 
 # 5. EXPORT EXCEL
 with tab5:
     st.header("Export Hasil Analisis")
     if st.session_state['readability_df'].empty:
-        st.warning("Belum ada data analisis yang bisa diekspor. Jalankan analisis di tab 'Readability Analysis' terlebih dahulu.")
+        st.warning("Belum ada data analisis. Silakan jalankan analisis di tab 'Readability Analysis' terlebih dahulu.")
     else:
         st.write("Unduh laporan lengkap dalam format Excel.")
         
