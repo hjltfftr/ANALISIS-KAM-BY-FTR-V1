@@ -196,7 +196,7 @@ with tab4:
                         try:
                             genai.configure(api_key=api_key)
                             # Menggunakan model flash terbaru yang efisien
-                            model = genai.GenerativeModel('gemini-1.5-flash')
+                            model = genai.GenerativeModel('gemini-pro')
                             
                             prompt = f"""
                             Anda adalah seorang asisten auditor senior yang ahli. 
