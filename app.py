@@ -7,6 +7,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import plotly.express as px
 import io
+import google.generativeai as genai
 
 # Konfigurasi Halaman
 st.set_page_config(page_title="KAM Analyzer", layout="wide", page_icon="📄")
@@ -85,7 +86,7 @@ with tab2:
                 results.append(metrics)
             
             df_readability = pd.DataFrame(results)
-            # Reorder columns
+            # Menyusun ulang urutan kolom
             cols = ['Filename', 'Word Count', 'Sentence Count', 'Flesch Reading Ease', 'Gunning Fog', 'FK Grade']
             df_readability = df_readability[cols]
             st.session_state['readability_df'] = df_readability
@@ -135,24 +136,61 @@ with tab3:
 # 4. AI SUMMARY
 with tab4:
     st.header("AI Summary")
-    st.markdown("""
-    *Fitur ini memerlukan integrasi API eksternal seperti OpenAI API atau Google Gemini API.*
+    st.markdown("Fitur ini menggunakan **Google Gemini AI** untuk mengekstrak dan meringkas risiko audit utama dari dokumen KAM.")
     
-    **Rencana implementasi:**
-    1. Ekstrak poin-poin utama dari masing-masing KAM.
-    2. Ringkasan disajikan secara singkat per dokumen.
-    """)
+    # Input API Key agar aman dan tidak di-hardcode
+    api_key = st.text_input("🔑 Masukkan Google Gemini API Key Anda:", type="password", help="Dapatkan API key di aistudio.google.com")
     
-    if st.session_state['documents']:
-        selected_doc = st.selectbox("Pilih dokumen untuk di-summary (Mockup):", list(st.session_state['documents'].keys()))
-        if st.button("Generate Summary (Mockup)"):
-            st.success("Ini adalah area placeholder untuk hasil dari LLM. Anda bisa menambahkan library seperti `openai` atau `google-generativeai` ke depannya.")
+    if not st.session_state['documents']:
+        st.info("Silakan upload dokumen PDF terlebih dahulu di tab 'Upload PDF'.")
+    else:
+        selected_doc = st.selectbox("Pilih dokumen KAM yang ingin diringkas:", list(st.session_state['documents'].keys()))
+        
+        if st.button("✨ Generate Summary"):
+            if not api_key:
+                st.warning("⚠️ Silakan masukkan API Key Anda terlebih dahulu sebelum meng-generate summary.")
+            else:
+                with st.spinner("AI sedang membaca dan menyusun ringkasan..."):
+                    try:
+                        # 1. Konfigurasi API
+                        genai.configure(api_key=api_key)
+                        
+                        # 2. Inisialisasi Model
+                        model = genai.GenerativeModel('gemini-1.5-flash')
+                        
+                        # 3. Menyiapkan Teks dan Prompt
+                        doc_text = st.session_state['documents'][selected_doc]
+                        
+                        prompt = f"""
+                        Anda adalah seorang asisten auditor senior yang ahli. 
+                        Bacalah teks Key Audit Matters (KAM) berikut dan berikan ringkasan eksekutif.
+                        
+                        Tolong strukturkan jawaban Anda dengan format berikut:
+                        1. **Fokus Audit Utama**: (Sebutkan apa yang menjadi isu utamanya secara singkat)
+                        2. **Alasan Menjadi KAM**: (Mengapa hal ini dianggap berisiko tinggi)
+                        3. **Respons Auditor**: (Langkah-langkah yang dilakukan auditor untuk memitigasi risiko tersebut, gunakan bullet points)
+                        
+                        Berikut adalah teks KAM-nya:
+                        ---
+                        {doc_text}
+                        """
+                        
+                        # 4. Generate Response
+                        response = model.generate_content(prompt)
+                        
+                        # 5. Tampilkan Hasil
+                        st.success("Ringkasan berhasil dibuat!")
+                        st.markdown("### 📋 Hasil Ringkasan AI:")
+                        st.info(response.text)
+                        
+                    except Exception as e:
+                        st.error(f"❌ Terjadi kesalahan saat menghubungi AI: {e}")
 
 # 5. EXPORT EXCEL
 with tab5:
     st.header("Export Hasil Analisis")
     if st.session_state['readability_df'].empty:
-        st.warning("Belum ada data analisis yang bisa diekspor. Jalankan analisis di tab sebelumnya.")
+        st.warning("Belum ada data analisis yang bisa diekspor. Jalankan analisis di tab 'Readability Analysis' terlebih dahulu.")
     else:
         st.write("Unduh laporan lengkap dalam format Excel.")
         
@@ -162,7 +200,7 @@ with tab5:
             # Sheet Readability
             st.session_state['readability_df'].to_excel(writer, sheet_name='Readability', index=False)
             
-            # Sheet Boilerplate jika ada
+            # Sheet Boilerplate jika ada dokumen lebih dari 1
             if len(st.session_state['documents']) >= 2:
                 doc_names = list(st.session_state['documents'].keys())
                 doc_texts = list(st.session_state['documents'].values())
