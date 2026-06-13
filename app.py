@@ -198,7 +198,7 @@ with tab4:
                     with st.spinner("AI sedang membaca dan menyusun ringkasan..."):
                         try:
                             genai.configure(api_key=api_key)
-                            model = genai.GenerativeModel('gemini-1.5-flash')
+                            model = genai.GenerativeModel('gemini pro')
                             
                             prompt = f"""
                             Anda adalah seorang asisten auditor senior yang ahli. 
