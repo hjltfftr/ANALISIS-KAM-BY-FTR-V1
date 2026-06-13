@@ -178,6 +178,23 @@ with tab4:
     
     api_key = st.text_input("🔑 Masukkan Google Gemini API Key Anda:", type="password", help="Dapatkan API key gratis di aistudio.google.com")
     
+    col1, col2 = st.columns([1, 3])
+    
+    with col1:
+        cek_model = st.button("🛠️ Cek Model Tersedia (Debug)")
+    
+    if cek_model:
+        if not api_key:
+            st.warning("Masukkan API Key dulu bos!")
+        else:
+            try:
+                genai.configure(api_key=api_key)
+                available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+                st.success("API Key Valid! Ini daftar model yang bisa bos pakai:")
+                st.write(available_models)
+            except Exception as e:
+                st.error(f"Gagal mengecek API Key: {e}")
+    
     if not st.session_state['documents']:
         st.info("Silakan upload dokumen PDF terlebih dahulu di tab 'Upload PDF'.")
     else:
@@ -195,8 +212,8 @@ with tab4:
                     with st.spinner("AI sedang menyusun ringkasan eksekutif..."):
                         try:
                             genai.configure(api_key=api_key)
-                            # Menggunakan model flash terbaru yang efisien
-                            model = genai.GenerativeModel('gemini-pro')
+                            # Memaksa menggunakan 1.5 flash versi terbaru
+                            model = genai.GenerativeModel('gemini-1.5-flash')
                             
                             prompt = f"""
                             Anda adalah seorang asisten auditor senior yang ahli. 
@@ -219,7 +236,7 @@ with tab4:
                             st.info(response.text)
                             
                         except Exception as e:
-                            st.error(f"❌ Gagal menghubungi AI. Pastikan API Key valid. Detail error: {e}")
+                            st.error(f"❌ Gagal menghubungi AI. Detail error: {e}")
 
 # 5. EXPORT EXCEL
 with tab5:
