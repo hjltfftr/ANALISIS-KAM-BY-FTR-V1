@@ -78,7 +78,7 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📂 Upload PDF", 
     "📖 Readability Analysis", 
     "🔍 Boilerplate Analysis", 
-    "🤖 AI Summary", 
+    "🤖 AI Summary & Comparison", 
     "💾 Export Excel"
 ])
 
@@ -171,15 +171,14 @@ with tab3:
             with col2:
                 st.info(f"**Most Unique/Least Similar Documents:**\n\n📄 {doc_names[min_idx[0]]} \n\n📄 {doc_names[min_idx[1]]}")
 
-# 4. AI SUMMARY
+# 4. AI SUMMARY & COMPARISON
 with tab4:
-    st.header("AI Summary")
-    st.markdown("Fitur ini menggunakan **Google Gemini AI** untuk mengekstrak risiko audit utama langsung dari teks KAM.")
+    st.header("🤖 AI Summary & Comparison")
+    st.markdown("Fitur ini menggunakan **Google Gemini AI** untuk meringkas atau membandingkan risiko audit utama antar dokumen KAM.")
     
     api_key = st.text_input("🔑 Masukkan Google Gemini API Key Anda:", type="password", help="Dapatkan API key gratis di aistudio.google.com")
     
     col1, col2 = st.columns([1, 3])
-    
     with col1:
         cek_model = st.button("🛠️ Cek Model Tersedia (Debug)")
     
@@ -190,7 +189,7 @@ with tab4:
             try:
                 genai.configure(api_key=api_key)
                 available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-                st.success("API Key Valid! Ini daftar model yang bisa bos pakai:")
+                st.success("API Key Valid!")
                 st.write(available_models)
             except Exception as e:
                 st.error(f"Gagal mengecek API Key: {e}")
@@ -198,45 +197,117 @@ with tab4:
     if not st.session_state['documents']:
         st.info("Silakan upload dokumen PDF terlebih dahulu di tab 'Upload PDF'.")
     else:
-        selected_doc = st.selectbox("Pilih dokumen KAM yang ingin diringkas:", list(st.session_state['documents'].keys()))
+        # Pilihan Mode Analisis
+        mode = st.radio("Pilih Mode Analisis AI:", ["Meringkas 1 Dokumen", "⚖️ Membandingkan 2 Dokumen"], horizontal=True)
         
-        if st.button("✨ Generate Summary"):
-            if not api_key:
-                st.warning("⚠️ Silakan masukkan API Key Anda terlebih dahulu.")
-            else:
-                doc_text = st.session_state['documents'][selected_doc]
-                
-                if not doc_text.strip():
-                    st.error("❌ Teks dokumen kosong. AI tidak dapat membuat ringkasan.")
+        # --- MODE 1: RINGKAS SINGLE DOKUMEN ---
+        if mode == "Meringkas 1 Dokumen":
+            selected_doc = st.selectbox("Pilih dokumen KAM yang ingin diringkas:", list(st.session_state['documents'].keys()))
+            
+            if st.button("✨ Generate Summary"):
+                if not api_key:
+                    st.warning("⚠️ Silakan masukkan API Key Anda terlebih dahulu.")
                 else:
-                    with st.spinner("AI sedang menyusun ringkasan eksekutif..."):
-                        try:
-                            genai.configure(api_key=api_key)
-                            # Memaksa menggunakan 1.5 flash versi terbaru
-                            model = genai.GenerativeModel('gemini-2.5-flash')
+                    doc_text = st.session_state['documents'][selected_doc]
+                    
+                    if not doc_text.strip():
+                        st.error("❌ Teks dokumen kosong. AI tidak dapat membuat ringkasan.")
+                    else:
+                        with st.spinner("AI sedang menyusun ringkasan eksekutif..."):
+                            try:
+                                genai.configure(api_key=api_key)
+                                model = genai.GenerativeModel('gemini-2.5-flash')
+                                
+                                prompt = f"""
+                                Anda adalah seorang asisten auditor senior yang ahli. 
+                                Bacalah teks Key Audit Matters (KAM) berikut dan berikan ringkasan eksekutif.
+                                
+                                Tolong strukturkan jawaban Anda dengan format berikut:
+                                1. **Fokus Audit Utama**: (Sebutkan apa yang menjadi isu utamanya secara singkat)
+                                2. **Alasan Menjadi KAM**: (Mengapa hal ini dianggap berisiko tinggi)
+                                3. **Respons Auditor**: (Langkah-langkah yang dilakukan auditor untuk memitigasi risiko tersebut, gunakan bullet points)
+                                
+                                Berikut adalah teks KAM-nya:
+                                ---
+                                {doc_text}
+                                """
+                                
+                                response = model.generate_content(prompt)
+                                st.success("Ringkasan berhasil dibuat!")
+                                st.markdown("### 📋 Hasil Ringkasan AI:")
+                                st.info(response.text)
+                                
+                            except Exception as e:
+                                st.error(f"❌ Gagal menghubungi AI. Detail error: {e}")
+
+        # --- MODE 2: BANDINGKAN DUA DOKUMEN ---
+        else:
+            if len(st.session_state['documents']) < 2:
+                st.warning("⚠️ Dibutuhkan minimal 2 dokumen yang di-upload untuk menggunakan fitur perbandingan ini bos.")
+            else:
+                doc_list = list(st.session_state['documents'].keys())
+                
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    doc_a = st.selectbox("Pilih Dokumen A:", doc_list, index=0)
+                with col_b:
+                    doc_b = st.selectbox("Pilih Dokumen B:", doc_list, index=1 if len(doc_list) > 1 else 0)
+                
+                if doc_a == doc_b:
+                    st.warning("⚠️ Dokumen A dan Dokumen B tidak boleh sama bos. Silakan pilih dua file yang berbeda.")
+                else:
+                    if st.button("🔍 Jalankan Analisis Perbandingan"):
+                        if not api_key:
+                            st.warning("⚠️ Silakan masukkan API Key Anda terlebih dahulu.")
+                        else:
+                            text_a = st.session_state['documents'][doc_a]
+                            text_b = st.session_state['documents'][doc_b]
                             
-                            prompt = f"""
-                            Anda adalah seorang asisten auditor senior yang ahli. 
-                            Bacalah teks Key Audit Matters (KAM) berikut dan berikan ringkasan eksekutif.
-                            
-                            Tolong strukturkan jawaban Anda dengan format berikut:
-                            1. **Fokus Audit Utama**: (Sebutkan apa yang menjadi isu utamanya secara singkat)
-                            2. **Alasan Menjadi KAM**: (Mengapa hal ini dianggap berisiko tinggi)
-                            3. **Respons Auditor**: (Langkah-langkah yang dilakukan auditor untuk memitigasi risiko tersebut, gunakan bullet points)
-                            
-                            Berikut adalah teks KAM-nya:
-                            ---
-                            {doc_text}
-                            """
-                            
-                            response = model.generate_content(prompt)
-                            
-                            st.success("Ringkasan berhasil dibuat!")
-                            st.markdown("### 📋 Hasil Ringkasan AI:")
-                            st.info(response.text)
-                            
-                        except Exception as e:
-                            st.error(f"❌ Gagal menghubungi AI. Detail error: {e}")
+                            if not text_a.strip() or not text_b.strip():
+                                st.error("❌ Salah satu atau kedua file teksnya kosong (Gagal OCR). Tidak bisa dibandingkan.")
+                            else:
+                                with st.spinner("Gemini sedang membaca, meringkas, dan menganalisis perbedaan kedua file..."):
+                                    try:
+                                        genai.configure(api_key=api_key)
+                                        model = genai.GenerativeModel('gemini-2.5-flash')
+                                        
+                                        prompt = f"""
+                                        Anda adalah seorang auditor senior dan pakar analisis risiko laporan keuangan.
+                                        Tugas Anda adalah membaca dua teks Key Audit Matters (KAM) berikut, meringkas masing-masing secara terpisah, lalu memberikan analisis perbandingan yang mendalam di antara keduanya.
+                                        
+                                        Tolong buat format laporan Anda menggunakan markdown yang rapi seperti struktur di bawah ini:
+                                        
+                                        ### 📄 Ringkasan Dokumen A ({doc_a})
+                                        * **Fokus Audit Utama**: ...
+                                        * **Alasan Menjadi KAM**: ...
+                                        * **Respons Auditor**: ...
+                                        
+                                        ### 📄 Ringkasan Dokumen B ({doc_b})
+                                        * **Fokus Audit Utama**: ...
+                                        * **Alasan Menjadi KAM**: ...
+                                        * **Respons Auditor**: ...
+                                        
+                                        ### ⚖️ Analisis Perbandingan & Perbedaan Utama
+                                        * **Persamaan**: (Jelaskan kesamaan isu risiko atau metodologi audit yang digunakan di kedua perusahaan ini)
+                                        * **Perbedaan Utama**: (Hal krusial apa yang muncul di Dokumen A tetapi tidak ada di Dokumen B, atau sebaliknya)
+                                        * **Insight Senior Auditor**: (Berikan kesimpulan ringkas mengenai kompleksitas risiko akuntansi dari kedua dokumen ini, mana yang areanya lebih berisiko)
+                                        
+                                        Berikut adalah isi teks dari Dokumen A ({doc_a}):
+                                        ---
+                                        {text_a}
+                                        
+                                        Berikut adalah isi teks dari Dokumen B ({doc_b}):
+                                        ---
+                                        {text_b}
+                                        """
+                                        
+                                        response = model.generate_content(prompt)
+                                        st.success("Analisis komparatif berhasil dibuat!")
+                                        st.markdown("### 📊 Hasil Perbandingan AI:")
+                                        st.info(response.text)
+                                        
+                                    except Exception as e:
+                                        st.error(f"❌ Gagal memproses perbandingan AI. Detail error: {e}")
 
 # 5. EXPORT EXCEL
 with tab5:
