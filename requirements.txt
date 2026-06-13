@@ -6,3 +6,4 @@ textstat
 scikit-learn
 openpyxl
 plotly
+google-generativeai
