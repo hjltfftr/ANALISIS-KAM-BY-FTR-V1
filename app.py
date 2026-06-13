@@ -213,7 +213,7 @@ with tab4:
                         try:
                             genai.configure(api_key=api_key)
                             # Memaksa menggunakan 1.5 flash versi terbaru
-                           model = genai.GenerativeModel('gemini-2.5-flash')
+                            model = genai.GenerativeModel('gemini-2.5-flash')
                             
                             prompt = f"""
                             Anda adalah seorang asisten auditor senior yang ahli. 
