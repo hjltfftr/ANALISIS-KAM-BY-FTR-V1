@@ -8,3 +8,6 @@ openpyxl
 plotly
 google-generativeai
 matplotlib
+pdf2image
+pytesseract
+Pillow
