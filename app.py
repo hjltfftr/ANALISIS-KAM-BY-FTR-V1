@@ -26,6 +26,12 @@ def extract_text_from_pdf(file_bytes):
     return text
 
 def calculate_readability(text):
+    # Jika teks kosong, kembalikan nilai default 0
+    if not text.strip():
+        return {
+            "Word Count": 0, "Sentence Count": 0, 
+            "Flesch Reading Ease": 0, "Gunning Fog": 0, "FK Grade": 0
+        }
     return {
         "Word Count": textstat.lexicon_count(text),
         "Sentence Count": textstat.sentence_count(text),
@@ -35,10 +41,15 @@ def calculate_readability(text):
     }
 
 def calculate_similarity(texts):
-    vectorizer = TfidfVectorizer(stop_words='english')
-    tfidf_matrix = vectorizer.fit_transform(texts)
-    sim_matrix = cosine_similarity(tfidf_matrix)
-    return sim_matrix
+    try:
+        # Menghapus stop_words='english' agar teks bahasa Indonesia tidak terfilter habis
+        vectorizer = TfidfVectorizer() 
+        tfidf_matrix = vectorizer.fit_transform(texts)
+        sim_matrix = cosine_similarity(tfidf_matrix)
+        return sim_matrix
+    except ValueError:
+        # Menangkap error jika seluruh dokumen kosong / berupa gambar hasil scan
+        return None
 
 # --- INISIALISASI SESSION STATE ---
 if 'documents' not in st.session_state:
@@ -58,7 +69,7 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 # 1. UPLOAD PDF
 with tab1:
     st.header("Upload Dokumen KAM")
-    uploaded_files = st.file_uploader("Pilih file PDF", type=['pdf'], accept_multiple_files=True)
+    uploaded_files = st.file_uploader("Pilih file PDF KAM (Disarankan halaman KAM saja)", type=['pdf'], accept_multiple_files=True)
     
     if uploaded_files:
         if st.button("Proses Dokumen"):
@@ -86,7 +97,6 @@ with tab2:
                 results.append(metrics)
             
             df_readability = pd.DataFrame(results)
-            # Menyusun ulang urutan kolom
             cols = ['Filename', 'Word Count', 'Sentence Count', 'Flesch Reading Ease', 'Gunning Fog', 'FK Grade']
             df_readability = df_readability[cols]
             st.session_state['readability_df'] = df_readability
@@ -104,41 +114,46 @@ with tab3:
         doc_texts = list(st.session_state['documents'].values())
         
         sim_matrix = calculate_similarity(doc_texts)
-        df_sim = pd.DataFrame(sim_matrix, index=doc_names, columns=doc_names)
         
-        st.subheader("Cosine Similarity Matrix")
-        st.dataframe(df_sim.style.background_gradient(cmap='YlGnBu', axis=None))
-        
-        st.subheader("Heatmap")
-        fig = px.imshow(sim_matrix,
-                        labels=dict(x="Dokumen", y="Dokumen", color="Similarity"),
-                        x=doc_names,
-                        y=doc_names,
-                        color_continuous_scale="YlGnBu",
-                        text_auto=".2f")
-        st.plotly_chart(fig, use_container_width=True)
-        
-        st.subheader("Insight")
-        col1, col2 = st.columns(2)
-        
-        # Mencari nilai kemiripan tertinggi dan terendah (mengabaikan diagonal/dirinya sendiri)
-        np.fill_diagonal(sim_matrix, -1) # Set diagonal ke -1 agar tidak terdeteksi sebagai max
-        max_idx = np.unravel_index(np.argmax(sim_matrix, axis=None), sim_matrix.shape)
-        
-        np.fill_diagonal(sim_matrix, 2) # Set diagonal ke 2 agar tidak terdeteksi sebagai min
-        min_idx = np.unravel_index(np.argmin(sim_matrix, axis=None), sim_matrix.shape)
-        
-        with col1:
-            st.info(f"**Most Similar Documents:**\n\n📄 {doc_names[max_idx[0]]} \n\n📄 {doc_names[max_idx[1]]}")
-        with col2:
-            st.info(f"**Most Unique/Least Similar Documents:**\n\n📄 {doc_names[min_idx[0]]} \n\n📄 {doc_names[min_idx[1]]}")
+        if sim_matrix is None:
+            st.error("❌ Analisis gagal. Dokumen PDF tidak berisi teks digital yang bisa dibaca (kemungkinan berupa gambar/hasil scan). Silakan pastikan teks pada PDF dapat diseleksi/di-copy secara manual.")
+        else:
+            df_sim = pd.DataFrame(sim_matrix, index=doc_names, columns=doc_names)
+            
+            st.subheader("Cosine Similarity Matrix")
+            st.dataframe(df_sim.style.background_gradient(cmap='YlGnBu', axis=None))
+            
+            st.subheader("Heatmap")
+            fig = px.imshow(sim_matrix,
+                            labels=dict(x="Dokumen", y="Dokumen", color="Similarity"),
+                            x=doc_names,
+                            y=doc_names,
+                            color_continuous_scale="YlGnBu",
+                            text_auto=".2f")
+            st.plotly_chart(fig, use_container_width=True)
+            
+            st.subheader("Insight")
+            col1, col2 = st.columns(2)
+            
+            # Membuat salinan matriks untuk visualisasi insight tanpa merusak matriks asli
+            sim_matrix_insight = sim_matrix.copy()
+            
+            np.fill_diagonal(sim_matrix_insight, -1)
+            max_idx = np.unravel_index(np.argmax(sim_matrix_insight, axis=None), sim_matrix_insight.shape)
+            
+            np.fill_diagonal(sim_matrix_insight, 2)
+            min_idx = np.unravel_index(np.argmin(sim_matrix_insight, axis=None), sim_matrix_insight.shape)
+            
+            with col1:
+                st.info(f"**Most Similar Documents:**\n\n📄 {doc_names[max_idx[0]]} \n\n📄 {doc_names[max_idx[1]]}")
+            with col2:
+                st.info(f"**Most Unique/Least Similar Documents:**\n\n📄 {doc_names[min_idx[0]]} \n\n📄 {doc_names[min_idx[1]]}")
 
 # 4. AI SUMMARY
 with tab4:
     st.header("AI Summary")
     st.markdown("Fitur ini menggunakan **Google Gemini AI** untuk mengekstrak dan meringkas risiko audit utama dari dokumen KAM.")
     
-    # Input API Key agar aman dan tidak di-hardcode
     api_key = st.text_input("🔑 Masukkan Google Gemini API Key Anda:", type="password", help="Dapatkan API key di aistudio.google.com")
     
     if not st.session_state['documents']:
@@ -150,41 +165,38 @@ with tab4:
             if not api_key:
                 st.warning("⚠️ Silakan masukkan API Key Anda terlebih dahulu sebelum meng-generate summary.")
             else:
-                with st.spinner("AI sedang membaca dan menyusun ringkasan..."):
-                    try:
-                        # 1. Konfigurasi API
-                        genai.configure(api_key=api_key)
-                        
-                        # 2. Inisialisasi Model
-                        model = genai.GenerativeModel('gemini-1.5-flash')
-                        
-                        # 3. Menyiapkan Teks dan Prompt
-                        doc_text = st.session_state['documents'][selected_doc]
-                        
-                        prompt = f"""
-                        Anda adalah seorang asisten auditor senior yang ahli. 
-                        Bacalah teks Key Audit Matters (KAM) berikut dan berikan ringkasan eksekutif.
-                        
-                        Tolong strukturkan jawaban Anda dengan format berikut:
-                        1. **Fokus Audit Utama**: (Sebutkan apa yang menjadi isu utamanya secara singkat)
-                        2. **Alasan Menjadi KAM**: (Mengapa hal ini dianggap berisiko tinggi)
-                        3. **Respons Auditor**: (Langkah-langkah yang dilakukan auditor untuk memitigasi risiko tersebut, gunakan bullet points)
-                        
-                        Berikut adalah teks KAM-nya:
-                        ---
-                        {doc_text}
-                        """
-                        
-                        # 4. Generate Response
-                        response = model.generate_content(prompt)
-                        
-                        # 5. Tampilkan Hasil
-                        st.success("Ringkasan berhasil dibuat!")
-                        st.markdown("### 📋 Hasil Ringkasan AI:")
-                        st.info(response.text)
-                        
-                    except Exception as e:
-                        st.error(f"❌ Terjadi kesalahan saat menghubungi AI: {e}")
+                doc_text = st.session_state['documents'][selected_doc]
+                
+                if not doc_text.strip():
+                    st.error("❌ Gagal membuat ringkasan. Dokumen ini tidak memiliki teks yang bisa dibaca oleh AI (kemungkinan besar file hasil scan/gambar).")
+                else:
+                    with st.spinner("AI sedang membaca dan menyusun ringkasan..."):
+                        try:
+                            genai.configure(api_key=api_key)
+                            model = genai.GenerativeModel('gemini-1.5-flash')
+                            
+                            prompt = f"""
+                            Anda adalah seorang asisten auditor senior yang ahli. 
+                            Bacalah teks Key Audit Matters (KAM) berikut dan berikan ringkasan eksekutif.
+                            
+                            Tolong strukturkan jawaban Anda dengan format berikut:
+                            1. **Fokus Audit Utama**: (Sebutkan apa yang menjadi isu utamanya secara singkat)
+                            2. **Alasan Menjadi KAM**: (Mengapa hal ini dianggap berisiko tinggi)
+                            3. **Respons Auditor**: (Langkah-langkah yang dilakukan auditor untuk memitigasi risiko tersebut, gunakan bullet points)
+                            
+                            Berikut adalah teks KAM-nya:
+                            ---
+                            {doc_text}
+                            """
+                            
+                            response = model.generate_content(prompt)
+                            
+                            st.success("Ringkasan berhasil dibuat!")
+                            st.markdown("### 📋 Hasil Ringkasan AI:")
+                            st.info(response.text)
+                            
+                        except Exception as e:
+                            st.error(f"❌ Terjadi kesalahan saat menghubungi AI: {e}")
 
 # 5. EXPORT EXCEL
 with tab5:
@@ -194,19 +206,19 @@ with tab5:
     else:
         st.write("Unduh laporan lengkap dalam format Excel.")
         
-        # Membuat buffer untuk Excel
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            # Sheet Readability
+            # Sheet 1: Readability
             st.session_state['readability_df'].to_excel(writer, sheet_name='Readability', index=False)
             
-            # Sheet Boilerplate jika ada dokumen lebih dari 1
+            # Sheet 2: Boilerplate (Jika ada dan sukses diproses)
             if len(st.session_state['documents']) >= 2:
                 doc_names = list(st.session_state['documents'].keys())
                 doc_texts = list(st.session_state['documents'].values())
-                sim_matrix = cosine_similarity(TfidfVectorizer(stop_words='english').fit_transform(doc_texts))
-                df_sim = pd.DataFrame(sim_matrix, index=doc_names, columns=doc_names)
-                df_sim.to_excel(writer, sheet_name='Similarity Matrix')
+                sim_matrix = calculate_similarity(doc_texts)
+                if sim_matrix is not None:
+                    df_sim = pd.DataFrame(sim_matrix, index=doc_names, columns=doc_names)
+                    df_sim.to_excel(writer, sheet_name='Similarity Matrix')
 
         processed_data = output.getvalue()
         
