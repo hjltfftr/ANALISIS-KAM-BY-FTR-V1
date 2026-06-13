@@ -8,25 +8,42 @@ from sklearn.metrics.pairwise import cosine_similarity
 import plotly.express as px
 import io
 import google.generativeai as genai
+from pdf2image import convert_from_bytes
+import pytesseract
 
 # Konfigurasi Halaman
 st.set_page_config(page_title="KAM Analyzer", layout="wide", page_icon="📄")
-st.title("📄 KAM (Key Audit Matters) Analyzer")
+st.title("📄 KAM Analyzer (Teks & Scan PDF)")
 
 # --- FUNGSI PENDUKUNG ---
 
 @st.cache_data
 def extract_text_from_pdf(file_bytes):
     text = ""
-    with pdfplumber.open(file_bytes) as pdf:
+    # 1. Coba ekstraksi teks normal dulu (lebih ringan & cepat)
+    with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
         for page in pdf.pages:
             extracted = page.extract_text()
             if extracted:
                 text += extracted + "\n"
+    
+    # 2. Jika teks kosong (berarti PDF gambar/scan), gunakan OCR
+    if len(text.strip()) < 50:
+        try:
+            # Mengubah PDF menjadi kumpulan gambar
+            images = convert_from_bytes(file_bytes)
+            
+            # Membaca teks dari gambar (Bahasa Indonesia & Inggris)
+            for img in images:
+                # Jika error bahasa, hapus 'ind+' dan gunakan 'eng' saja
+                text += pytesseract.image_to_string(img, lang='ind+eng') + "\n" 
+                
+        except Exception as e:
+            st.error(f"⚠️ Mode OCR gagal. Pastikan Tesseract dan Poppler terinstal di server/sistem. Detail: {e}")
+            
     return text
 
 def calculate_readability(text):
-    # Jika teks kosong, kembalikan nilai default 0
     if not text.strip():
         return {
             "Word Count": 0, "Sentence Count": 0, 
@@ -42,18 +59,16 @@ def calculate_readability(text):
 
 def calculate_similarity(texts):
     try:
-        # Menghapus stop_words='english' agar teks bahasa Indonesia tidak terfilter habis
         vectorizer = TfidfVectorizer() 
         tfidf_matrix = vectorizer.fit_transform(texts)
         sim_matrix = cosine_similarity(tfidf_matrix)
         return sim_matrix
     except ValueError:
-        # Menangkap error jika seluruh dokumen kosong / berupa gambar hasil scan
         return None
 
 # --- INISIALISASI SESSION STATE ---
 if 'documents' not in st.session_state:
-    st.session_state['documents'] = {}  # Format: {"filename": "text content"}
+    st.session_state['documents'] = {}  
 if 'readability_df' not in st.session_state:
     st.session_state['readability_df'] = pd.DataFrame()
 
@@ -69,13 +84,25 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 # 1. UPLOAD PDF
 with tab1:
     st.header("Upload Dokumen KAM")
-    uploaded_files = st.file_uploader("Pilih file PDF KAM (Disarankan halaman KAM saja)", type=['pdf'], accept_multiple_files=True)
+    st.info("💡 Aplikasi ini sekarang sudah dilengkapi **Auto-OCR**. PDF berbentuk gambar/scan akan otomatis terbaca, namun prosesnya akan memakan waktu sedikit lebih lama.")
+    
+    uploaded_files = st.file_uploader("Pilih file PDF (Disarankan halaman KAM saja)", type=['pdf'], accept_multiple_files=True)
     
     if uploaded_files:
         if st.button("Proses Dokumen"):
-            with st.spinner("Mengekstrak teks dari PDF..."):
-                for file in uploaded_files:
-                    st.session_state['documents'][file.name] = extract_text_from_pdf(file)
+            # Progress bar untuk memantau OCR jika file banyak
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            for idx, file in enumerate(uploaded_files):
+                status_text.text(f"Mengekstrak teks dari: {file.name}...")
+                # Mengirimkan format bytes agar bisa dibaca oleh pdf2image
+                st.session_state['documents'][file.name] = extract_text_from_pdf(file.getvalue())
+                
+                # Update progress
+                progress_bar.progress((idx + 1) / len(uploaded_files))
+                
+            status_text.text("Selesai!")
             st.success(f"{len(uploaded_files)} dokumen berhasil diproses!")
 
     if st.session_state['documents']:
@@ -116,7 +143,7 @@ with tab3:
         sim_matrix = calculate_similarity(doc_texts)
         
         if sim_matrix is None:
-            st.error("❌ Analisis gagal. Dokumen PDF tidak berisi teks digital yang bisa dibaca (kemungkinan berupa gambar/hasil scan). Silakan pastikan teks pada PDF dapat diseleksi/di-copy secara manual.")
+            st.error("❌ Analisis gagal. Teks kosong. Jika ini file scan, pastikan OCR berjalan dengan benar.")
         else:
             df_sim = pd.DataFrame(sim_matrix, index=doc_names, columns=doc_names)
             
@@ -135,9 +162,7 @@ with tab3:
             st.subheader("Insight")
             col1, col2 = st.columns(2)
             
-            # Membuat salinan matriks untuk visualisasi insight tanpa merusak matriks asli
             sim_matrix_insight = sim_matrix.copy()
-            
             np.fill_diagonal(sim_matrix_insight, -1)
             max_idx = np.unravel_index(np.argmax(sim_matrix_insight, axis=None), sim_matrix_insight.shape)
             
@@ -168,7 +193,7 @@ with tab4:
                 doc_text = st.session_state['documents'][selected_doc]
                 
                 if not doc_text.strip():
-                    st.error("❌ Gagal membuat ringkasan. Dokumen ini tidak memiliki teks yang bisa dibaca oleh AI (kemungkinan besar file hasil scan/gambar).")
+                    st.error("❌ Gagal membuat ringkasan. Teks pada dokumen ini kosong.")
                 else:
                     with st.spinner("AI sedang membaca dan menyusun ringkasan..."):
                         try:
@@ -208,10 +233,8 @@ with tab5:
         
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            # Sheet 1: Readability
             st.session_state['readability_df'].to_excel(writer, sheet_name='Readability', index=False)
             
-            # Sheet 2: Boilerplate (Jika ada dan sukses diproses)
             if len(st.session_state['documents']) >= 2:
                 doc_names = list(st.session_state['documents'].keys())
                 doc_texts = list(st.session_state['documents'].values())
