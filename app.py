@@ -12,42 +12,29 @@ from pdf2image import convert_from_bytes
 import pytesseract
 
 # Konfigurasi Halaman
-st.set_page_config(page_title="KAM Analyzer", layout="wide", page_icon="📄")
-st.title("📄 KAM Analyzer (Teks & Scan PDF)")
+st.set_page_config(page_title="KAM Analyzer Pro (One-Click)", layout="wide", page_icon="🚀")
+st.title("🚀 KAM Analyzer Pro (One-Click Analysis)")
+st.markdown("Unggah 2-4 dokumen KAM Anda, masukkan API Key, dan biarkan sistem melakukan **ekstraksi, analisis readability, uji kemiripan (boilerplate), ringkasan AI, dan perbandingan komprehensif** dalam satu kali proses.")
 
 # --- FUNGSI PENDUKUNG ---
-
 @st.cache_data
 def extract_text_from_pdf(file_bytes):
     text = ""
-    # 1. Coba ekstraksi teks digital normal dulu
     with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
         for page in pdf.pages:
             extracted = page.extract_text()
-            if extracted:
-                text += extracted + "\n"
+            if extracted: text += extracted + "\n"
     
-    # 2. Jika teks kosong/sangat pendek (berarti PDF gambar/scan), gunakan OCR
     if len(text.strip()) < 50:
         try:
-            # Mengubah PDF menjadi gambar di memori
             images = convert_from_bytes(file_bytes)
-            
-            # Membaca teks menggunakan OCR dengan dukungan Bahasa Indonesia + Inggris
-            for img in images:
-                text += pytesseract.image_to_string(img, lang='ind+eng') + "\n" 
-                
-        except Exception as e:
-            st.error(f"⚠️ Mode OCR gagal dijalankan. Detail: {e}")
-            
+            for img in images: text += pytesseract.image_to_string(img, lang='ind+eng') + "\n" 
+        except Exception: pass
     return text
 
 def calculate_readability(text):
     if not text.strip():
-        return {
-            "Word Count": 0, "Sentence Count": 0, 
-            "Flesch Reading Ease": 0, "Gunning Fog": 0, "FK Grade": 0
-        }
+        return {"Word Count": 0, "Sentence Count": 0, "Flesch Reading Ease": 0, "Gunning Fog": 0, "FK Grade": 0}
     return {
         "Word Count": textstat.lexicon_count(text),
         "Sentence Count": textstat.sentence_count(text),
@@ -58,282 +45,157 @@ def calculate_readability(text):
 
 def calculate_similarity(texts):
     try:
-        # Tfidf Tanpa filter stop words bahasa inggris agar teks indonesia aman
         vectorizer = TfidfVectorizer() 
         tfidf_matrix = vectorizer.fit_transform(texts)
-        sim_matrix = cosine_similarity(tfidf_matrix)
-        return sim_matrix
+        return cosine_similarity(tfidf_matrix)
     except ValueError:
-        # Mengembalikan None jika seluruh dokumen teksnya kosong/gagal OCR
         return None
 
 # --- INISIALISASI SESSION STATE ---
-if 'documents' not in st.session_state:
-    st.session_state['documents'] = {}  
-if 'readability_df' not in st.session_state:
-    st.session_state['readability_df'] = pd.DataFrame()
+# Kita simpan semua hasil agar tidak hilang saat tombol download ditekan
+if 'is_processed' not in st.session_state:
+    st.session_state.update({
+        'is_processed': False,
+        'df_readability': pd.DataFrame(),
+        'df_sim': None,
+        'sim_matrix': None,
+        'doc_names': [],
+        'ai_summaries': {},
+        'ai_comparison': "",
+        'excel_bytes': None
+    })
 
-# --- STRUKTUR UI (TABS) ---
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📂 Upload PDF", 
-    "📖 Readability Analysis", 
-    "🔍 Boilerplate Analysis", 
-    "🤖 AI Summary & Comparison", 
-    "💾 Export Excel"
-])
+# --- AREA INPUT ---
+st.header("1. Persiapan Data")
+col_api, col_upload = st.columns([1, 2])
+with col_api:
+    api_key = st.text_input("🔑 Masukkan Google Gemini API Key:", type="password")
+with col_upload:
+    uploaded_files = st.file_uploader("📂 Pilih Dokumen PDF (Disarankan 2-4 File KAM)", type=['pdf'], accept_multiple_files=True)
 
-# 1. UPLOAD PDF
-with tab1:
-    st.header("Upload Dokumen KAM")
-    st.info("💡 Aplikasi ini dilengkapi sistem **Auto-OCR**. PDF hasil gambar/scan akan diproses otomatis (proses memakan waktu sedikit lebih lama).")
-    
-    uploaded_files = st.file_uploader("Pilih file PDF KAM (Disarankan halaman KAM saja)", type=['pdf'], accept_multiple_files=True)
-    
-    if uploaded_files:
-        if st.button("Proses Dokumen"):
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            for idx, file in enumerate(uploaded_files):
-                status_text.text(f"Memproses file ({idx+1}/{len(uploaded_files)}): {file.name}...")
-                st.session_state['documents'][file.name] = extract_text_from_pdf(file.getvalue())
-                progress_bar.progress((idx + 1) / len(uploaded_files))
-                
-            status_text.text("Seluruh dokumen berhasil diproses!")
-            st.success("Selesai!")
-
-    if st.session_state['documents']:
-        st.write("### Dokumen yang siap dianalisis:")
-        for name in st.session_state['documents'].keys():
-            st.markdown(f"- {name}")
-
-# 2. READABILITY ANALYSIS
-with tab2:
-    st.header("Readability Analysis")
-    if not st.session_state['documents']:
-        st.info("Silakan upload dokumen PDF terlebih dahulu di tab 'Upload PDF'.")
+# --- TOMBOL EKSEKUSI ---
+if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="primary"):
+    if not api_key:
+        st.error("⚠️ Masukkan API Key terlebih dahulu bos!")
+    elif not uploaded_files or len(uploaded_files) < 2:
+        st.error("⚠️ Mohon unggah minimal 2 dokumen agar fitur perbandingan bisa berjalan.")
     else:
-        if st.button("Jalankan Analisis Keterbacaan"):
-            results = []
-            for name, text in st.session_state['documents'].items():
+        st.session_state['doc_names'] = [f.name for f in uploaded_files]
+        documents = {}
+        
+        # 1. Ekstraksi Teks & Readability
+        with st.spinner("⏳ [1/4] Mengekstrak teks & menghitung Readability..."):
+            results_readability = []
+            for file in uploaded_files:
+                text = extract_text_from_pdf(file.getvalue())
+                documents[file.name] = text
+                
                 metrics = calculate_readability(text)
-                metrics['Filename'] = name
-                results.append(metrics)
+                metrics['Filename'] = file.name
+                results_readability.append(metrics)
+                
+            df_read = pd.DataFrame(results_readability)[['Filename', 'Word Count', 'Sentence Count', 'Flesch Reading Ease', 'Gunning Fog', 'FK Grade']]
+            st.session_state['df_readability'] = df_read
             
-            df_readability = pd.DataFrame(results)
-            cols = ['Filename', 'Word Count', 'Sentence Count', 'Flesch Reading Ease', 'Gunning Fog', 'FK Grade']
-            df_readability = df_readability[cols]
-            st.session_state['readability_df'] = df_readability
-            
-        if not st.session_state['readability_df'].empty:
-            st.dataframe(st.session_state['readability_df'], use_container_width=True)
+        # 2. Boilerplate Analysis (Kemiripan)
+        with st.spinner("⏳ [2/4] Menganalisis kemiripan dokumen (Boilerplate)..."):
+            doc_texts = list(documents.values())
+            sim_matrix = calculate_similarity(doc_texts)
+            st.session_state['sim_matrix'] = sim_matrix
+            if sim_matrix is not None:
+                st.session_state['df_sim'] = pd.DataFrame(sim_matrix, index=st.session_state['doc_names'], columns=st.session_state['doc_names'])
 
-# 3. BOILERPLATE ANALYSIS
-with tab3:
-    st.header("Boilerplate Analysis (Kemiripan Teks)")
-    if len(st.session_state['documents']) < 2:
-        st.warning("Dibutuhkan minimal 2 dokumen untuk melakukan analisis boilerplate/kemiripan.")
-    else:
-        doc_names = list(st.session_state['documents'].keys())
-        doc_texts = list(st.session_state['documents'].values())
-        
-        sim_matrix = calculate_similarity(doc_texts)
-        
-        if sim_matrix is None:
-            st.error("❌ Analisis kemiripan gagal karena teks di dalam dokumen kosong atau sistem OCR belum berhasil mengekstrak karakter.")
-        else:
-            df_sim = pd.DataFrame(sim_matrix, index=doc_names, columns=doc_names)
+        # 3. AI Summaries & Comparison
+        with st.spinner("⏳ [3/4] AI sedang membaca dan menyusun ringkasan..."):
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel('gemini-2.5-flash')
             
-            st.subheader("Cosine Similarity Matrix")
-            st.dataframe(df_sim.style.background_gradient(cmap='YlGnBu', axis=None))
+            # Ringkasan per dokumen
+            summaries = {}
+            for name, text in documents.items():
+                prompt_sum = f"Ringkas Key Audit Matters berikut secara eksekutif (1. Fokus Audit, 2. Alasan, 3. Respons):\n\n{text}"
+                try:
+                    res = model.generate_content(prompt_sum)
+                    summaries[name] = res.text
+                except Exception as e:
+                    summaries[name] = f"Error: {e}"
+            st.session_state['ai_summaries'] = summaries
             
-            st.subheader("Heatmap")
-            fig = px.imshow(sim_matrix,
-                            labels=dict(x="Dokumen", y="Dokumen", color="Similarity"),
-                            x=doc_names,
-                            y=doc_names,
-                            color_continuous_scale="YlGnBu",
-                            text_auto=".2f")
-            st.plotly_chart(fig, use_container_width=True)
+            # Perbandingan Keseluruhan
+            combined_texts = ""
+            for name, text in documents.items():
+                combined_texts += f"\n\n### Dokumen: {name}\n{text}\n"
+                
+            prompt_comp = f"""Anda adalah auditor senior. Baca dokumen-dokumen Key Audit Matters berikut.
+            Buatlah analisis perbandingan antar dokumen tersebut.
+            Format jawaban:
+            * **Persamaan Risiko Utama**: ...
+            * **Perbedaan Signifikan**: ...
+            * **Insight Komparatif**: (Dokumen mana yang profil risikonya paling kompleks dan mengapa)
             
-            st.subheader("Insight")
-            col1, col2 = st.columns(2)
+            Berikut adalah dokumennya:{combined_texts}"""
             
-            sim_matrix_insight = sim_matrix.copy()
-            np.fill_diagonal(sim_matrix_insight, -1)
-            max_idx = np.unravel_index(np.argmax(sim_matrix_insight, axis=None), sim_matrix_insight.shape)
-            
-            np.fill_diagonal(sim_matrix_insight, 2)
-            min_idx = np.unravel_index(np.argmin(sim_matrix_insight, axis=None), sim_matrix_insight.shape)
-            
-            with col1:
-                st.info(f"**Most Similar Documents:**\n\n📄 {doc_names[max_idx[0]]} \n\n📄 {doc_names[max_idx[1]]}")
-            with col2:
-                st.info(f"**Most Unique/Least Similar Documents:**\n\n📄 {doc_names[min_idx[0]]} \n\n📄 {doc_names[min_idx[1]]}")
-
-# 4. AI SUMMARY & COMPARISON
-with tab4:
-    st.header("🤖 AI Summary & Comparison")
-    st.markdown("Fitur ini menggunakan **Google Gemini AI** untuk meringkas atau membandingkan risiko audit utama antar dokumen KAM.")
-    
-    api_key = st.text_input("🔑 Masukkan Google Gemini API Key Anda:", type="password", help="Dapatkan API key gratis di aistudio.google.com")
-    
-    col1, col2 = st.columns([1, 3])
-    with col1:
-        cek_model = st.button("🛠️ Cek Model Tersedia (Debug)")
-    
-    if cek_model:
-        if not api_key:
-            st.warning("Masukkan API Key dulu bos!")
-        else:
             try:
-                genai.configure(api_key=api_key)
-                available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-                st.success("API Key Valid!")
-                st.write(available_models)
+                res_comp = model.generate_content(prompt_comp)
+                st.session_state['ai_comparison'] = res_comp.text
             except Exception as e:
-                st.error(f"Gagal mengecek API Key: {e}")
+                st.session_state['ai_comparison'] = f"Error Perbandingan: {e}"
+
+        # 4. Generate Excel
+        with st.spinner("⏳ [4/4] Menyusun laporan Excel..."):
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                # Siapkan Dataframe Laporan Utama
+                df_final = st.session_state['df_readability'].copy()
+                df_final['AI Summary'] = df_final['Filename'].map(st.session_state['ai_summaries'])
+                # Masukkan AI comparison di baris pertama saja agar tidak redundan
+                df_final['AI Comparison Analysis'] = ""
+                df_final.loc[0, 'AI Comparison Analysis'] = st.session_state['ai_comparison']
+                
+                df_final.to_excel(writer, sheet_name='Laporan Utama', index=False)
+                
+                if st.session_state['df_sim'] is not None:
+                    st.session_state['df_sim'].to_excel(writer, sheet_name='Matrix Kemiripan')
+            
+            st.session_state['excel_bytes'] = output.getvalue()
+            st.session_state['is_processed'] = True
+
+# --- AREA HASIL (Ditampilkan setelah proses selesai) ---
+if st.session_state['is_processed']:
+    st.success("✅ Seluruh proses analisis berhasil diselesaikan!")
+    st.divider()
     
-    if not st.session_state['documents']:
-        st.info("Silakan upload dokumen PDF terlebih dahulu di tab 'Upload PDF'.")
+    st.header("📊 1. Analisis Keterbacaan (Readability)")
+    st.dataframe(st.session_state['df_readability'], use_container_width=True)
+    
+    st.header("🔍 2. Peta Kemiripan Teks (Boilerplate)")
+    if st.session_state['sim_matrix'] is not None:
+        fig = px.imshow(st.session_state['sim_matrix'], 
+                        x=st.session_state['doc_names'], y=st.session_state['doc_names'], 
+                        color_continuous_scale="YlGnBu", text_auto=".2f")
+        st.plotly_chart(fig, use_container_width=True)
     else:
-        # Pilihan Mode Analisis
-        mode = st.radio("Pilih Mode Analisis AI:", ["Meringkas 1 Dokumen", "⚖️ Membandingkan 2 Dokumen"], horizontal=True)
+        st.warning("Teks tidak dapat dibandingkan (mungkin kosong/gagal OCR).")
         
-        # --- MODE 1: RINGKAS SINGLE DOKUMEN ---
-        if mode == "Meringkas 1 Dokumen":
-            selected_doc = st.selectbox("Pilih dokumen KAM yang ingin diringkas:", list(st.session_state['documents'].keys()))
-            
-            if st.button("✨ Generate Summary"):
-                if not api_key:
-                    st.warning("⚠️ Silakan masukkan API Key Anda terlebih dahulu.")
-                else:
-                    doc_text = st.session_state['documents'][selected_doc]
-                    
-                    if not doc_text.strip():
-                        st.error("❌ Teks dokumen kosong. AI tidak dapat membuat ringkasan.")
-                    else:
-                        with st.spinner("AI sedang menyusun ringkasan eksekutif..."):
-                            try:
-                                genai.configure(api_key=api_key)
-                                model = genai.GenerativeModel('gemini-2.5-flash')
-                                
-                                prompt = f"""
-                                Anda adalah seorang asisten auditor senior yang ahli. 
-                                Bacalah teks Key Audit Matters (KAM) berikut dan berikan ringkasan eksekutif.
-                                
-                                Tolong strukturkan jawaban Anda dengan format berikut:
-                                1. **Fokus Audit Utama**: (Sebutkan apa yang menjadi isu utamanya secara singkat)
-                                2. **Alasan Menjadi KAM**: (Mengapa hal ini dianggap berisiko tinggi)
-                                3. **Respons Auditor**: (Langkah-langkah yang dilakukan auditor untuk memitigasi risiko tersebut, gunakan bullet points)
-                                
-                                Berikut adalah teks KAM-nya:
-                                ---
-                                {doc_text}
-                                """
-                                
-                                response = model.generate_content(prompt)
-                                st.success("Ringkasan berhasil dibuat!")
-                                st.markdown("### 📋 Hasil Ringkasan AI:")
-                                st.info(response.text)
-                                
-                            except Exception as e:
-                                st.error(f"❌ Gagal menghubungi AI. Detail error: {e}")
-
-        # --- MODE 2: BANDINGKAN DUA DOKUMEN ---
-        else:
-            if len(st.session_state['documents']) < 2:
-                st.warning("⚠️ Dibutuhkan minimal 2 dokumen yang di-upload untuk menggunakan fitur perbandingan ini bos.")
-            else:
-                doc_list = list(st.session_state['documents'].keys())
+    st.header("🤖 3. Hasil AI (Ringkasan & Perbandingan)")
+    col_sum, col_comp = st.columns([1, 1])
+    
+    with col_sum:
+        st.subheader("Ringkasan Per Dokumen")
+        for name, summary in st.session_state['ai_summaries'].items():
+            with st.expander(f"📄 Ringkasan: {name}"):
+                st.write(summary)
                 
-                col_a, col_b = st.columns(2)
-                with col_a:
-                    doc_a = st.selectbox("Pilih Dokumen A:", doc_list, index=0)
-                with col_b:
-                    doc_b = st.selectbox("Pilih Dokumen B:", doc_list, index=1 if len(doc_list) > 1 else 0)
-                
-                if doc_a == doc_b:
-                    st.warning("⚠️ Dokumen A dan Dokumen B tidak boleh sama bos. Silakan pilih dua file yang berbeda.")
-                else:
-                    if st.button("🔍 Jalankan Analisis Perbandingan"):
-                        if not api_key:
-                            st.warning("⚠️ Silakan masukkan API Key Anda terlebih dahulu.")
-                        else:
-                            text_a = st.session_state['documents'][doc_a]
-                            text_b = st.session_state['documents'][doc_b]
-                            
-                            if not text_a.strip() or not text_b.strip():
-                                st.error("❌ Salah satu atau kedua file teksnya kosong (Gagal OCR). Tidak bisa dibandingkan.")
-                            else:
-                                with st.spinner("Gemini sedang membaca, meringkas, dan menganalisis perbedaan kedua file..."):
-                                    try:
-                                        genai.configure(api_key=api_key)
-                                        model = genai.GenerativeModel('gemini-2.5-flash')
-                                        
-                                        prompt = f"""
-                                        Anda adalah seorang auditor senior dan pakar analisis risiko laporan keuangan.
-                                        Tugas Anda adalah membaca dua teks Key Audit Matters (KAM) berikut, meringkas masing-masing secara terpisah, lalu memberikan analisis perbandingan yang mendalam di antara keduanya.
-                                        
-                                        Tolong buat format laporan Anda menggunakan markdown yang rapi seperti struktur di bawah ini:
-                                        
-                                        ### 📄 Ringkasan Dokumen A ({doc_a})
-                                        * **Fokus Audit Utama**: ...
-                                        * **Alasan Menjadi KAM**: ...
-                                        * **Respons Auditor**: ...
-                                        
-                                        ### 📄 Ringkasan Dokumen B ({doc_b})
-                                        * **Fokus Audit Utama**: ...
-                                        * **Alasan Menjadi KAM**: ...
-                                        * **Respons Auditor**: ...
-                                        
-                                        ### ⚖️ Analisis Perbandingan & Perbedaan Utama
-                                        * **Persamaan**: (Jelaskan kesamaan isu risiko atau metodologi audit yang digunakan di kedua perusahaan ini)
-                                        * **Perbedaan Utama**: (Hal krusial apa yang muncul di Dokumen A tetapi tidak ada di Dokumen B, atau sebaliknya)
-                                        * **Insight Senior Auditor**: (Berikan kesimpulan ringkas mengenai kompleksitas risiko akuntansi dari kedua dokumen ini, mana yang areanya lebih berisiko)
-                                        
-                                        Berikut adalah isi teks dari Dokumen A ({doc_a}):
-                                        ---
-                                        {text_a}
-                                        
-                                        Berikut adalah isi teks dari Dokumen B ({doc_b}):
-                                        ---
-                                        {text_b}
-                                        """
-                                        
-                                        response = model.generate_content(prompt)
-                                        st.success("Analisis komparatif berhasil dibuat!")
-                                        st.markdown("### 📊 Hasil Perbandingan AI:")
-                                        st.info(response.text)
-                                        
-                                    except Exception as e:
-                                        st.error(f"❌ Gagal memproses perbandingan AI. Detail error: {e}")
-
-# 5. EXPORT EXCEL
-with tab5:
-    st.header("Export Hasil Analisis")
-    if st.session_state['readability_df'].empty:
-        st.warning("Belum ada data analisis. Silakan jalankan analisis di tab 'Readability Analysis' terlebih dahulu.")
-    else:
-        st.write("Unduh laporan lengkap dalam format Excel.")
+    with col_comp:
+        st.subheader("⚖️ Analisis Perbandingan Keseluruhan")
+        st.info(st.session_state['ai_comparison'])
         
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            st.session_state['readability_df'].to_excel(writer, sheet_name='Readability', index=False)
-            
-            if len(st.session_state['documents']) >= 2:
-                doc_names = list(st.session_state['documents'].keys())
-                doc_texts = list(st.session_state['documents'].values())
-                sim_matrix = calculate_similarity(doc_texts)
-                if sim_matrix is not None:
-                    df_sim = pd.DataFrame(sim_matrix, index=doc_names, columns=doc_names)
-                    df_sim.to_excel(writer, sheet_name='Similarity Matrix')
-
-        processed_data = output.getvalue()
-        
-        st.download_button(
-            label="📥 Download Laporan Excel",
-            data=processed_data,
-            file_name="KAM_Analysis_Report.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+    st.divider()
+    st.header("📥 Unduh Laporan")
+    st.download_button(
+        label="💾 Download Laporan Lengkap (Format Excel)",
+        data=st.session_state['excel_bytes'],
+        file_name="KAM_Full_Analysis_Report.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        type="primary"
+    )
