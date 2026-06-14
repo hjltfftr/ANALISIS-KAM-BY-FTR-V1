@@ -17,6 +17,17 @@ st.title("🚀 KAM Analyzer Pro (One-Click Analysis)")
 st.markdown("Unggah 2-4 dokumen KAM Anda, masukkan API Key, dan biarkan sistem melakukan **ekstraksi, analisis readability, uji kemiripan (boilerplate), ringkasan AI, dan perbandingan komprehensif** dalam satu kali proses.")
 
 # --- FUNGSI PENDUKUNG ---
+
+def interpret_flesch(score):
+    if score >= 60: return "Standar / Mudah"
+    elif score >= 30: return "Sulit (Tingkat Akademik/Profesional)"
+    else: return "Sangat Sulit (Sangat Kompleks)"
+
+def interpret_similarity(score):
+    if score > 0.80: return "Sangat Tinggi (Indikasi kuat Boilerplate / Copy-Paste)"
+    elif score > 0.50: return "Sedang (Ada kesamaan format/isu standar industri)"
+    else: return "Rendah (Dokumen sangat berbeda / Pendekatan Unik)"
+
 @st.cache_data
 def extract_text_from_pdf(file_bytes):
     text = ""
@@ -34,11 +45,14 @@ def extract_text_from_pdf(file_bytes):
 
 def calculate_readability(text):
     if not text.strip():
-        return {"Word Count": 0, "Sentence Count": 0, "Flesch Reading Ease": 0, "Gunning Fog": 0, "FK Grade": 0}
+        return {"Word Count": 0, "Sentence Count": 0, "Flesch Score": 0, "Interpretasi Flesch": "Teks Kosong", "Gunning Fog": 0, "FK Grade": 0}
+    
+    flesch_score = textstat.flesch_reading_ease(text)
     return {
         "Word Count": textstat.lexicon_count(text),
         "Sentence Count": textstat.sentence_count(text),
-        "Flesch Reading Ease": textstat.flesch_reading_ease(text),
+        "Flesch Score": flesch_score,
+        "Interpretasi Flesch": interpret_flesch(flesch_score),
         "Gunning Fog": textstat.gunning_fog(text),
         "FK Grade": textstat.flesch_kincaid_grade(text)
     }
@@ -52,7 +66,6 @@ def calculate_similarity(texts):
         return None
 
 # --- INISIALISASI SESSION STATE ---
-# Kita simpan semua hasil agar tidak hilang saat tombol download ditekan
 if 'is_processed' not in st.session_state:
     st.session_state.update({
         'is_processed': False,
@@ -94,7 +107,7 @@ if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="
                 metrics['Filename'] = file.name
                 results_readability.append(metrics)
                 
-            df_read = pd.DataFrame(results_readability)[['Filename', 'Word Count', 'Sentence Count', 'Flesch Reading Ease', 'Gunning Fog', 'FK Grade']]
+            df_read = pd.DataFrame(results_readability)[['Filename', 'Word Count', 'Sentence Count', 'Flesch Score', 'Interpretasi Flesch', 'Gunning Fog', 'FK Grade']]
             st.session_state['df_readability'] = df_read
             
         # 2. Boilerplate Analysis (Kemiripan)
@@ -110,7 +123,6 @@ if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="
             genai.configure(api_key=api_key)
             model = genai.GenerativeModel('gemini-2.5-flash')
             
-            # Ringkasan per dokumen
             summaries = {}
             for name, text in documents.items():
                 prompt_sum = f"Ringkas Key Audit Matters berikut secara eksekutif (1. Fokus Audit, 2. Alasan, 3. Respons):\n\n{text}"
@@ -121,7 +133,6 @@ if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="
                     summaries[name] = f"Error: {e}"
             st.session_state['ai_summaries'] = summaries
             
-            # Perbandingan Keseluruhan
             combined_texts = ""
             for name, text in documents.items():
                 combined_texts += f"\n\n### Dokumen: {name}\n{text}\n"
@@ -145,10 +156,8 @@ if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="
         with st.spinner("⏳ [4/4] Menyusun laporan Excel..."):
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                # Siapkan Dataframe Laporan Utama
                 df_final = st.session_state['df_readability'].copy()
                 df_final['AI Summary'] = df_final['Filename'].map(st.session_state['ai_summaries'])
-                # Masukkan AI comparison di baris pertama saja agar tidak redundan
                 df_final['AI Comparison Analysis'] = ""
                 df_final.loc[0, 'AI Comparison Analysis'] = st.session_state['ai_comparison']
                 
@@ -160,20 +169,40 @@ if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="
             st.session_state['excel_bytes'] = output.getvalue()
             st.session_state['is_processed'] = True
 
-# --- AREA HASIL (Ditampilkan setelah proses selesai) ---
+# --- AREA HASIL ---
 if st.session_state['is_processed']:
     st.success("✅ Seluruh proses analisis berhasil diselesaikan!")
     st.divider()
     
+    # Menampilkan Readability beserta Interpretasinya
     st.header("📊 1. Analisis Keterbacaan (Readability)")
+    st.markdown("Semakin kecil angka **Flesch Score**, semakin kompleks bahasa yang digunakan auditor dalam menyusun KAM.")
     st.dataframe(st.session_state['df_readability'], use_container_width=True)
     
+    # Menampilkan Boilerplate beserta Interpretasinya
     st.header("🔍 2. Peta Kemiripan Teks (Boilerplate)")
     if st.session_state['sim_matrix'] is not None:
         fig = px.imshow(st.session_state['sim_matrix'], 
                         x=st.session_state['doc_names'], y=st.session_state['doc_names'], 
                         color_continuous_scale="YlGnBu", text_auto=".2f")
         st.plotly_chart(fig, use_container_width=True)
+        
+        # Logika Pencarian Nilai Kemiripan Tertinggi
+        sim_matrix_copy = st.session_state['sim_matrix'].copy()
+        np.fill_diagonal(sim_matrix_copy, -1) # Hindari 1.0 dari dokumen yang sama
+        max_sim = np.max(sim_matrix_copy)
+        max_idx = np.unravel_index(np.argmax(sim_matrix_copy, axis=None), sim_matrix_copy.shape)
+        
+        st.subheader("💡 Kesimpulan Boilerplate:")
+        kategori_sim = interpret_similarity(max_sim)
+        pesan = f"Kemiripan tertinggi sebesar **{max_sim*100:.1f}%** ditemukan antara dokumen **{st.session_state['doc_names'][max_idx[0]]}** dan **{st.session_state['doc_names'][max_idx[1]]}**.\n\nStatus: **{kategori_sim}**"
+        
+        if max_sim > 0.80:
+            st.warning(pesan)
+        elif max_sim > 0.50:
+            st.info(pesan)
+        else:
+            st.success(pesan)
     else:
         st.warning("Teks tidak dapat dibandingkan (mungkin kosong/gagal OCR).")
         
