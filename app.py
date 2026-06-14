@@ -13,21 +13,34 @@ import pytesseract
 
 # Konfigurasi Halaman
 st.set_page_config(page_title="KAM Analyzer Pro (One-Click)", layout="wide", page_icon="🚀")
-st.title("🚀 KAM Analyzer Pro (One-Click Analysis)")
-st.markdown("Unggah 2-4 dokumen KAM Anda, masukkan API Key, dan biarkan sistem melakukan **ekstraksi, analisis readability, uji kemiripan (boilerplate), ringkasan AI, dan perbandingan komprehensif** dalam satu kali proses.")
+st.title("🚀 KAM Analyzer Pro (With Readability Interpretation)")
+st.markdown("Unggah 2-4 dokumen KAM Anda, masukkan API Key, dan biarkan sistem melakukan **ekstraksi, analisis readability beserta interpretasinya, uji kemiripan (boilerplate), ringkasan AI, dan perbandingan komprehensif** dalam satu kali proses.")
+
+# --- FUNGSI INTERPRETASI SKOR ---
+def interpret_fre(score):
+    if score >= 90: return "Sangat Mudah"
+    elif score >= 80: return "Mudah"
+    elif score >= 70: return "Agak Mudah"
+    elif score >= 60: return "Standar / Sedang"
+    elif score >= 50: return "Agak Sulit"
+    elif score >= 30: return "Sulit (Tingkat Sarjana)"
+    else: return "Sangat Sulit (Profesional / Pascasarjana)"
+
+def interpret_fog(score):
+    if score < 6: return "Sangat Mudah"
+    elif score <= 8: return "Mudah (Tingkat SMP)"
+    elif score <= 12: return "Standar (Tingkat SMA)"
+    elif score <= 16: return "Sulit (Tingkat Sarjana)"
+    else: return "Sangat Sulit (Profesional / Pascasarjana)"
+
+def interpret_fk(score):
+    if score <= 6: return "Mudah (Tingkat SD)"
+    elif score <= 9: return "Sedang (Tingkat SMP)"
+    elif score <= 12: return "Tinggi (Tingkat SMA)"
+    elif score <= 16: return "Sangat Tinggi (Tingkat Kuliah)"
+    else: return "Akademik Lanjut / Profesional"
 
 # --- FUNGSI PENDUKUNG ---
-
-def interpret_flesch(score):
-    if score >= 60: return "Standar / Mudah"
-    elif score >= 30: return "Sulit (Tingkat Akademik/Profesional)"
-    else: return "Sangat Sulit (Sangat Kompleks)"
-
-def interpret_similarity(score):
-    if score > 0.80: return "Sangat Tinggi (Indikasi kuat Boilerplate / Copy-Paste)"
-    elif score > 0.50: return "Sedang (Ada kesamaan format/isu standar industri)"
-    else: return "Rendah (Dokumen sangat berbeda / Pendekatan Unik)"
-
 @st.cache_data
 def extract_text_from_pdf(file_bytes):
     text = ""
@@ -45,16 +58,26 @@ def extract_text_from_pdf(file_bytes):
 
 def calculate_readability(text):
     if not text.strip():
-        return {"Word Count": 0, "Sentence Count": 0, "Flesch Score": 0, "Interpretasi Flesch": "Teks Kosong", "Gunning Fog": 0, "FK Grade": 0}
+        return {
+            "Word Count": 0, "Sentence Count": 0, 
+            "Flesch Reading Ease": 0, "FRE Interpretation": "Teks Kosong",
+            "Gunning Fog": 0, "Fog Interpretation": "Teks Kosong",
+            "FK Grade": 0, "FK Interpretation": "Teks Kosong"
+        }
     
-    flesch_score = textstat.flesch_reading_ease(text)
+    fre = textstat.flesch_reading_ease(text)
+    fog = textstat.gunning_fog(text)
+    fk = textstat.flesch_kincaid_grade(text)
+    
     return {
         "Word Count": textstat.lexicon_count(text),
         "Sentence Count": textstat.sentence_count(text),
-        "Flesch Score": flesch_score,
-        "Interpretasi Flesch": interpret_flesch(flesch_score),
-        "Gunning Fog": textstat.gunning_fog(text),
-        "FK Grade": textstat.flesch_kincaid_grade(text)
+        "Flesch Reading Ease": fre,
+        "FRE Interpretation": interpret_fre(fre),
+        "Gunning Fog": fog,
+        "Fog Interpretation": interpret_fog(fog),
+        "FK Grade": fk,
+        "FK Interpretation": interpret_fk(fk)
     }
 
 def calculate_similarity(texts):
@@ -97,7 +120,7 @@ if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="
         documents = {}
         
         # 1. Ekstraksi Teks & Readability
-        with st.spinner("⏳ [1/4] Mengekstrak teks & menghitung Readability..."):
+        with st.spinner("⏳ [1/4] Mengekstrak teks & menghitung Readability + Interpretasi..."):
             results_readability = []
             for file in uploaded_files:
                 text = extract_text_from_pdf(file.getvalue())
@@ -107,7 +130,14 @@ if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="
                 metrics['Filename'] = file.name
                 results_readability.append(metrics)
                 
-            df_read = pd.DataFrame(results_readability)[['Filename', 'Word Count', 'Sentence Count', 'Flesch Score', 'Interpretasi Flesch', 'Gunning Fog', 'FK Grade']]
+            # Menyusun urutan kolom agar angka berdampingan langsung dengan interpretasinya
+            cols_order = [
+                'Filename', 'Word Count', 'Sentence Count', 
+                'Flesch Reading Ease', 'FRE Interpretation', 
+                'Gunning Fog', 'Fog Interpretation', 
+                'FK Grade', 'FK Interpretation'
+            ]
+            df_read = pd.DataFrame(results_readability)[cols_order]
             st.session_state['df_readability'] = df_read
             
         # 2. Boilerplate Analysis (Kemiripan)
@@ -123,6 +153,7 @@ if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="
             genai.configure(api_key=api_key)
             model = genai.GenerativeModel('gemini-2.5-flash')
             
+            # Ringkasan per dokumen
             summaries = {}
             for name, text in documents.items():
                 prompt_sum = f"Ringkas Key Audit Matters berikut secara eksekutif (1. Fokus Audit, 2. Alasan, 3. Respons):\n\n{text}"
@@ -133,6 +164,7 @@ if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="
                     summaries[name] = f"Error: {e}"
             st.session_state['ai_summaries'] = summaries
             
+            # Perbandingan Keseluruhan
             combined_texts = ""
             for name, text in documents.items():
                 combined_texts += f"\n\n### Dokumen: {name}\n{text}\n"
@@ -156,6 +188,7 @@ if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="
         with st.spinner("⏳ [4/4] Menyusun laporan Excel..."):
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                # Siapkan Dataframe Laporan Utama
                 df_final = st.session_state['df_readability'].copy()
                 df_final['AI Summary'] = df_final['Filename'].map(st.session_state['ai_summaries'])
                 df_final['AI Comparison Analysis'] = ""
@@ -169,40 +202,20 @@ if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="
             st.session_state['excel_bytes'] = output.getvalue()
             st.session_state['is_processed'] = True
 
-# --- AREA HASIL ---
+# --- AREA HASIL (Ditampilkan setelah proses selesai) ---
 if st.session_state['is_processed']:
     st.success("✅ Seluruh proses analisis berhasil diselesaikan!")
     st.divider()
     
-    # Menampilkan Readability beserta Interpretasinya
-    st.header("📊 1. Analisis Keterbacaan (Readability)")
-    st.markdown("Semakin kecil angka **Flesch Score**, semakin kompleks bahasa yang digunakan auditor dalam menyusun KAM.")
+    st.header("📊 1. Analisis Keterbacaan & Interpretasi Skor")
     st.dataframe(st.session_state['df_readability'], use_container_width=True)
     
-    # Menampilkan Boilerplate beserta Interpretasinya
     st.header("🔍 2. Peta Kemiripan Teks (Boilerplate)")
     if st.session_state['sim_matrix'] is not None:
         fig = px.imshow(st.session_state['sim_matrix'], 
                         x=st.session_state['doc_names'], y=st.session_state['doc_names'], 
                         color_continuous_scale="YlGnBu", text_auto=".2f")
         st.plotly_chart(fig, use_container_width=True)
-        
-        # Logika Pencarian Nilai Kemiripan Tertinggi
-        sim_matrix_copy = st.session_state['sim_matrix'].copy()
-        np.fill_diagonal(sim_matrix_copy, -1) # Hindari 1.0 dari dokumen yang sama
-        max_sim = np.max(sim_matrix_copy)
-        max_idx = np.unravel_index(np.argmax(sim_matrix_copy, axis=None), sim_matrix_copy.shape)
-        
-        st.subheader("💡 Kesimpulan Boilerplate:")
-        kategori_sim = interpret_similarity(max_sim)
-        pesan = f"Kemiripan tertinggi sebesar **{max_sim*100:.1f}%** ditemukan antara dokumen **{st.session_state['doc_names'][max_idx[0]]}** dan **{st.session_state['doc_names'][max_idx[1]]}**.\n\nStatus: **{kategori_sim}**"
-        
-        if max_sim > 0.80:
-            st.warning(pesan)
-        elif max_sim > 0.50:
-            st.info(pesan)
-        else:
-            st.success(pesan)
     else:
         st.warning("Teks tidak dapat dibandingkan (mungkin kosong/gagal OCR).")
         
@@ -222,9 +235,9 @@ if st.session_state['is_processed']:
     st.divider()
     st.header("📥 Unduh Laporan")
     st.download_button(
-        label="💾 Download Laporan Lengkap (Format Excel)",
+        label="💾 Download Laporan Lengkap + Interpretasi (Format Excel)",
         data=st.session_state['excel_bytes'],
-        file_name="KAM_Full_Analysis_Report.xlsx",
+        file_name="KAM_Analysis_With_Interpretation.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         type="primary"
     )
