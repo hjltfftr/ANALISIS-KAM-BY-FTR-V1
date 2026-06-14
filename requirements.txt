@@ -11,3 +11,5 @@ matplotlib
 pdf2image
 pytesseract
 Pillow
+gspread
+google-auth
