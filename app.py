@@ -7,16 +7,19 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import plotly.express as px
 import io
+import re
 import google.generativeai as genai
 from pdf2image import convert_from_bytes
 import pytesseract
+import gspread
+from google.oauth2.service_account import Credentials
 
 # Konfigurasi Halaman
-st.set_page_config(page_title="KAM Analyzer Pro (Auto-Key)", layout="wide", page_icon="🚀")
-st.title("🚀 KAM Analyzer Pro (Auto-Key)")
-st.markdown("Unggah 2-4 dokumen KAM Anda. Sistem akan otomatis menggunakan API Key yang tersimpan di server untuk melakukan **ekstraksi, analisis readability, uji kemiripan (boilerplate), ringkasan AI, dan perbandingan komprehensif**.")
+st.set_page_config(page_title="KAM Analyzer Pro (Sheets Sync)", layout="wide", page_icon="🚀")
+st.title("🚀 KAM Analyzer Pro (Direct to Sheets)")
+st.markdown("Unggah dokumen KAM Anda (Format: **NAMA EMITEN TAHUN.pdf**, contoh: `ACES 2023.pdf`). Sistem akan memproses dan dapat mengirimkan hasilnya langsung ke Google Spreadsheet Anda.")
 
-# --- MENGAMBIL API KEY DARI STREAMLIT SECRETS ---
+# --- MENGAMBIL API & KREDENSIAL DARI SECRETS ---
 try:
     API_KEY = st.secrets["GEMINI_API_KEY"]
 except KeyError:
@@ -30,7 +33,6 @@ def extract_text_from_pdf(file_bytes):
         for page in pdf.pages:
             extracted = page.extract_text()
             if extracted: text += extracted + "\n"
-    
     if len(text.strip()) < 50:
         try:
             images = convert_from_bytes(file_bytes)
@@ -38,9 +40,17 @@ def extract_text_from_pdf(file_bytes):
         except Exception: pass
     return text
 
+def parse_filename(filename):
+    # Membersihkan ekstensi .pdf
+    clean = re.sub(r'\.pdf$', '', filename, flags=re.IGNORECASE).strip()
+    # Memisahkan berdasarkan spasi terakhir (diasumsikan tahun)
+    parts = clean.rsplit(' ', 1)
+    if len(parts) == 2 and parts[1].isdigit():
+        return parts[0], parts[1]
+    return clean, "-" # Jika tidak ada tahun, masukkan strip
+
 def calculate_readability(text):
-    if not text.strip():
-        return {"Word Count": 0, "Sentence Count": 0, "Flesch Reading Ease": 0, "Gunning Fog": 0, "FK Grade": 0}
+    if not text.strip(): return {"Word Count": 0, "Sentence Count": 0, "Flesch Reading Ease": 0, "Gunning Fog": 0, "FK Grade": 0}
     return {
         "Word Count": textstat.lexicon_count(text),
         "Sentence Count": textstat.sentence_count(text),
@@ -50,33 +60,33 @@ def calculate_readability(text):
     }
 
 def interpret_flesch(score):
-    if score >= 60: return "Mudah (Bahasa Standar)"
-    elif score >= 30: return "Sulit (Bahasa Formal/Bisnis)"
-    else: return "Sangat Sulit (Bahasa Akademis/Hukum)"
+    if score >= 60: return "Mudah (Standar)"
+    elif score >= 30: return "Sulit (Formal)"
+    else: return "Sangat Sulit (Akademis)"
 
 def interpret_grade(score):
-    if score < 10: return "Tingkat Menengah (SMA)"
-    elif score <= 16: return "Tingkat Lanjut (Sarjana/Kuliah)"
-    else: return "Tingkat Pakar (Profesional/Auditor)"
+    if score < 10: return "Menengah (SMA)"
+    elif score <= 16: return "Lanjut (Sarjana)"
+    else: return "Pakar (Auditor)"
 
 def interpret_similarity(score):
-    if score >= 0.75: return "🔴 Sangat Mirip (Indikasi Kuat Boilerplate)"
-    elif score >= 0.40: return "🟡 Kemiripan Sedang (Sebagian Format Standar)"
-    else: return "🟢 Unik (Berbeda Signifikan / Customized)"
+    if score >= 0.75: return "🔴 Sangat Mirip (Indikasi Boilerplate)"
+    elif score >= 0.40: return "🟡 Kemiripan Sedang"
+    else: return "🟢 Unik"
 
 def calculate_similarity(texts):
     try:
         vectorizer = TfidfVectorizer() 
         tfidf_matrix = vectorizer.fit_transform(texts)
         return cosine_similarity(tfidf_matrix)
-    except ValueError:
-        return None
+    except ValueError: return None
 
 # --- INISIALISASI SESSION STATE ---
 if 'is_processed' not in st.session_state:
     st.session_state.update({
         'is_processed': False,
         'df_readability': pd.DataFrame(),
+        'df_boilerplate_db': pd.DataFrame(),
         'df_sim': None,
         'sim_matrix': None,
         'doc_names': [],
@@ -89,31 +99,37 @@ if 'is_processed' not in st.session_state:
 # --- AREA INPUT ---
 st.header("1. Persiapan Data")
 
-# Jika API Key belum disetting di Streamlit Cloud, tampilkan peringatan
 if not API_KEY:
-    st.error("⚠️ **API Key belum diatur!** Silakan buka pengaturan Streamlit Cloud (Manage App -> Settings -> Secrets) dan tambahkan `GEMINI_API_KEY = 'kunci_anda_disini'`.")
+    st.error("⚠️ **API Key belum diatur!** Cek pengaturan Secrets.")
 
-uploaded_files = st.file_uploader("📂 Pilih Dokumen PDF (Disarankan 2-4 File KAM)", type=['pdf'], accept_multiple_files=True)
+col_upload, col_sheet = st.columns([1, 1])
+with col_upload:
+    uploaded_files = st.file_uploader("📂 Pilih Dokumen PDF (Contoh: ACES 2023.pdf)", type=['pdf'], accept_multiple_files=True)
+with col_sheet:
+    sheet_url = st.text_input("🔗 Link Google Spreadsheet Anda (Wajib diisi jika ingin fitur kirim):", placeholder="https://docs.google.com/spreadsheets/d/...")
 
 # --- TOMBOL EKSEKUSI ---
 if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="primary"):
     if not API_KEY:
-        st.error("⚠️ Proses dihentikan. Silakan atur GEMINI_API_KEY di menu Secrets Streamlit Cloud terlebih dahulu bos!")
+        st.error("⚠️ Proses dihentikan. Atur GEMINI_API_KEY terlebih dahulu.")
     elif not uploaded_files or len(uploaded_files) < 2:
-        st.error("⚠️ Mohon unggah minimal 2 dokumen agar fitur perbandingan bisa berjalan secara optimal.")
+        st.error("⚠️ Mohon unggah minimal 2 dokumen untuk analisis perbandingan.")
     else:
         st.session_state['doc_names'] = [f.name for f in uploaded_files]
         documents = {}
         
-        # 1. Ekstraksi Teks & Readability
-        with st.spinner("⏳ [1/4] Mengekstrak teks & menghitung Readability..."):
+        with st.spinner("⏳ [1/4] Mengekstrak teks & memecah Nama/Tahun..."):
             results_readability = []
             for file in uploaded_files:
                 text = extract_text_from_pdf(file.getvalue())
                 documents[file.name] = text
                 
                 metrics = calculate_readability(text)
-                metrics['Filename'] = file.name
+                # Parsing nama file
+                emiten, tahun = parse_filename(file.name)
+                metrics['Nama Emiten'] = emiten
+                metrics['Tahun KAM'] = tahun
+                metrics['Filename Asli'] = file.name
                 results_readability.append(metrics)
                 
             df_read = pd.DataFrame(results_readability)
@@ -121,16 +137,18 @@ if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="
             df_read['Interpretasi Gunning Fog'] = df_read['Gunning Fog'].apply(interpret_grade)
             df_read['Interpretasi FK Grade'] = df_read['FK Grade'].apply(interpret_grade)
             
-            cols = ['Filename', 'Word Count', 'Sentence Count', 'Flesch Reading Ease', 'Interpretasi Flesch', 'Gunning Fog', 'Interpretasi Gunning Fog', 'FK Grade', 'Interpretasi FK Grade']
+            # Reorder Kolom agar Emiten dan Tahun di depan
+            cols = ['Nama Emiten', 'Tahun KAM', 'Filename Asli', 'Word Count', 'Sentence Count', 'Flesch Reading Ease', 'Interpretasi Flesch', 'Gunning Fog', 'Interpretasi Gunning Fog', 'FK Grade', 'Interpretasi FK Grade']
             st.session_state['df_readability'] = df_read[cols]
             
-        # 2. Boilerplate Analysis
         with st.spinner("⏳ [2/4] Menganalisis kemiripan dokumen (Boilerplate)..."):
             doc_texts = list(documents.values())
             sim_matrix = calculate_similarity(doc_texts)
             st.session_state['sim_matrix'] = sim_matrix
             
             boilerplate_insights = []
+            boilerplate_db = [] # Untuk dikirim ke Spreadsheet terpisah
+            
             if sim_matrix is not None:
                 st.session_state['df_sim'] = pd.DataFrame(sim_matrix, index=st.session_state['doc_names'], columns=st.session_state['doc_names'])
                 doc_names = st.session_state['doc_names']
@@ -139,103 +157,122 @@ if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="
                         score = sim_matrix[i][j]
                         interp = interpret_similarity(score)
                         boilerplate_insights.append(f"{doc_names[i]} vs {doc_names[j]} : {score:.2%} -> {interp}")
+                        
+                        # Data rapi untuk database Boilerplate
+                        emiten_a, tahun_a = parse_filename(doc_names[i])
+                        emiten_b, tahun_b = parse_filename(doc_names[j])
+                        boilerplate_db.append({
+                            "Dokumen A": doc_names[i],
+                            "Emiten A": emiten_a, "Tahun A": tahun_a,
+                            "Dokumen B": doc_names[j],
+                            "Emiten B": emiten_b, "Tahun B": tahun_b,
+                            "Persentase Mirip": f"{score:.2%}",
+                            "Interpretasi": interp
+                        })
             
             st.session_state['boilerplate_insights'] = "\n".join(boilerplate_insights)
+            st.session_state['df_boilerplate_db'] = pd.DataFrame(boilerplate_db)
 
-        # 3. AI Summaries & Comparison
-        with st.spinner("⏳ [3/4] AI sedang membaca dan menyusun ringkasan..."):
+        with st.spinner("⏳ [3/4] AI sedang menyusun ringkasan..."):
             genai.configure(api_key=API_KEY)
             model = genai.GenerativeModel('gemini-2.5-flash')
             
             summaries = {}
             for name, text in documents.items():
-                prompt_sum = f"Ringkas Key Audit Matters berikut secara eksekutif (1. Fokus Audit, 2. Alasan, 3. Respons):\n\n{text}"
                 try:
-                    res = model.generate_content(prompt_sum)
+                    res = model.generate_content(f"Ringkas Key Audit Matters berikut secara eksekutif (1. Fokus Audit, 2. Alasan, 3. Respons):\n\n{text}")
                     summaries[name] = res.text
                 except Exception as e:
-                    summaries[name] = f"Error menghubungi AI: {e}. Pastikan API Key di Secrets valid."
+                    summaries[name] = f"Error: {e}"
             st.session_state['ai_summaries'] = summaries
             
             combined_texts = ""
-            for name, text in documents.items():
-                combined_texts += f"\n\n### Dokumen: {name}\n{text}\n"
-                
-            prompt_comp = f"""Anda adalah auditor senior. Baca dokumen-dokumen Key Audit Matters berikut.
-            Buatlah analisis perbandingan antar dokumen tersebut.
-            Format jawaban:
-            * **Persamaan Risiko Utama**: ...
-            * **Perbedaan Signifikan**: ...
-            * **Insight Komparatif**: (Dokumen mana yang profil risikonya paling kompleks dan mengapa)
-            
-            Berikut adalah dokumennya:{combined_texts}"""
-            
+            for name, text in documents.items(): combined_texts += f"\n\n### Dokumen: {name}\n{text}\n"
             try:
-                res_comp = model.generate_content(prompt_comp)
+                res_comp = model.generate_content(f"Anda auditor senior. Buat analisis perbandingan dari dokumen berikut. Format: Persamaan Risiko Utama, Perbedaan Signifikan, Insight Komparatif:\n{combined_texts}")
                 st.session_state['ai_comparison'] = res_comp.text
             except Exception as e:
-                st.session_state['ai_comparison'] = f"Error Perbandingan AI: {e}. Pastikan API Key di Secrets valid."
+                st.session_state['ai_comparison'] = f"Error Perbandingan AI: {e}"
 
-        # 4. Generate Excel
-        with st.spinner("⏳ [4/4] Menyusun laporan Excel..."):
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                df_final = st.session_state['df_readability'].copy()
-                df_final['AI Summary'] = df_final['Filename'].map(st.session_state['ai_summaries'])
-                
-                df_final['Interpretasi Boilerplate (Keseluruhan)'] = ""
-                df_final.loc[0, 'Interpretasi Boilerplate (Keseluruhan)'] = st.session_state['boilerplate_insights']
-                
-                df_final['AI Comparison Analysis'] = ""
-                df_final.loc[0, 'AI Comparison Analysis'] = st.session_state['ai_comparison']
-                
-                df_final.to_excel(writer, sheet_name='Laporan Utama', index=False)
-                
-                if st.session_state['df_sim'] is not None:
-                    st.session_state['df_sim'].to_excel(writer, sheet_name='Matrix Kemiripan')
-            
-            st.session_state['excel_bytes'] = output.getvalue()
+        with st.spinner("⏳ [4/4] Menyusun memori data..."):
             st.session_state['is_processed'] = True
 
-# --- AREA HASIL ---
+# --- AREA HASIL & SPREADSHEET SYNC ---
 if st.session_state['is_processed']:
-    st.success("✅ Seluruh proses analisis berhasil diselesaikan!")
+    st.success("✅ Analisis Berhasil!")
+    
+    # PERSIAPAN DATAFRAME FINAL
+    df_final = st.session_state['df_readability'].copy()
+    df_final['AI Summary'] = df_final['Filename Asli'].map(st.session_state['ai_summaries'])
+    df_final['Interpretasi Boilerplate (Keseluruhan)'] = ""
+    df_final.loc[0, 'Interpretasi Boilerplate (Keseluruhan)'] = st.session_state['boilerplate_insights']
+    df_final['AI Comparison Analysis'] = ""
+    df_final.loc[0, 'AI Comparison Analysis'] = st.session_state['ai_comparison']
+    
+    df_boiler = st.session_state['df_boilerplate_db'].copy()
+
+    # TOMBOL KIRIM KE SPREADSHEET
+    st.divider()
+    st.header("📤 Sinkronisasi ke Google Spreadsheet")
+    if st.button("🚀 KIRIM DATA KE SPREADSHEET SEKARANG", type="primary"):
+        if not sheet_url:
+            st.error("⚠️ Masukkan Link Google Spreadsheet di kotak bagian Persiapan Data terlebih dahulu!")
+        else:
+            try:
+                with st.spinner("Menghubungkan ke Google Server..."):
+                    # Akses Credentials dari Secrets
+                    scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+                    skey = st.secrets["gcp_service_account"]
+                    credentials = Credentials.from_service_account_info(skey, scopes=scopes)
+                    client = gspread.authorize(credentials)
+                    
+                    # Buka Spreadsheet
+                    sheet = client.open_by_url(sheet_url)
+                    
+                    # 1. Kirim ke Laporan Utama
+                    try:
+                        ws_utama = sheet.worksheet("Laporan Utama")
+                    except gspread.exceptions.WorksheetNotFound:
+                        ws_utama = sheet.add_worksheet(title="Laporan Utama", rows="1000", cols="20")
+                    
+                    # Jika sheet kosong, tulis header
+                    if not ws_utama.get_all_values():
+                        ws_utama.append_row(df_final.columns.tolist())
+                    
+                    # Bersihkan NaN/Float untuk gspread
+                    df_final_clean = df_final.fillna("").astype(str)
+                    ws_utama.append_rows(df_final_clean.values.tolist())
+                    
+                    # 2. Kirim ke Data Boilerplate
+                    try:
+                        ws_boiler = sheet.worksheet("Data Boilerplate")
+                    except gspread.exceptions.WorksheetNotFound:
+                        ws_boiler = sheet.add_worksheet(title="Data Boilerplate", rows="1000", cols="10")
+                        
+                    if not ws_boiler.get_all_values():
+                        ws_boiler.append_row(df_boiler.columns.tolist())
+                    
+                    df_boiler_clean = df_boiler.fillna("").astype(str)
+                    ws_boiler.append_rows(df_boiler_clean.values.tolist())
+                    
+                    st.success("✅ BOOM! Data Laporan Utama dan Data Boilerplate berhasil ditambahkan ke Spreadsheet Anda!")
+            except Exception as e:
+                st.error(f"❌ Gagal mengirim: {e}. Pastikan Service Account email sudah di-invite sebagai Editor di Google Sheet Anda.")
+
     st.divider()
     
-    st.header("📊 1. Analisis Keterbacaan & Interpretasi")
-    st.dataframe(st.session_state['df_readability'], use_container_width=True)
+    st.header("📊 1. Analisis Keterbacaan")
+    st.dataframe(df_final.drop(columns=['AI Summary', 'Interpretasi Boilerplate (Keseluruhan)', 'AI Comparison Analysis']), use_container_width=True)
     
-    st.header("🔍 2. Kemiripan Teks & Indikasi Boilerplate")
-    col_heatmap, col_insights = st.columns([2, 1])
-    with col_heatmap:
-        if st.session_state['sim_matrix'] is not None:
-            fig = px.imshow(st.session_state['sim_matrix'], 
-                            x=st.session_state['doc_names'], y=st.session_state['doc_names'], 
-                            color_continuous_scale="YlGnBu", text_auto=".2f")
-            st.plotly_chart(fig, use_container_width=True)
-    with col_insights:
-        st.subheader("💡 Interpretasi Boilerplate")
-        st.info(st.session_state['boilerplate_insights'] if st.session_state['boilerplate_insights'] else "Tidak ada data.")
+    st.header("🔍 2. Kemiripan Teks (Boilerplate Log)")
+    st.dataframe(df_boiler, use_container_width=True)
         
-    st.header("🤖 3. Hasil AI (Ringkasan & Perbandingan)")
+    st.header("🤖 3. Hasil AI")
     col_sum, col_comp = st.columns([1, 1])
-    
     with col_sum:
         st.subheader("Ringkasan Per Dokumen")
         for name, summary in st.session_state['ai_summaries'].items():
-            with st.expander(f"📄 Ringkasan: {name}"):
-                st.write(summary)
-                
+            with st.expander(f"📄 Ringkasan: {name}"): st.write(summary)
     with col_comp:
         st.subheader("⚖️ Analisis Perbandingan Keseluruhan")
         st.info(st.session_state['ai_comparison'])
-        
-    st.divider()
-    st.header("📥 Unduh Laporan")
-    st.download_button(
-        label="💾 Download Laporan Lengkap (Format Excel)",
-        data=st.session_state['excel_bytes'],
-        file_name="KAM_Full_Analysis_Report.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        type="primary"
-    )
