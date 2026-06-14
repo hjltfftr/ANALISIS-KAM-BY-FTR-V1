@@ -17,13 +17,18 @@ from google.oauth2.service_account import Credentials
 # Konfigurasi Halaman
 st.set_page_config(page_title="KAM Analyzer Pro (Sheets Sync)", layout="wide", page_icon="🚀")
 st.title("🚀 KAM Analyzer Pro (Direct to Sheets)")
-st.markdown("Unggah dokumen KAM Anda (Format: **NAMA EMITEN TAHUN.pdf**, contoh: `ACES 2023.pdf`). Sistem akan memproses dan dapat mengirimkan hasilnya langsung ke Google Spreadsheet Anda.")
+st.markdown("Unggah dokumen KAM Anda (Format: **NAMA EMITEN TAHUN.pdf**, contoh: `ACES 2023.pdf`). Sistem akan memproses dan otomatis mengirimkan hasilnya ke Google Spreadsheet Anda.")
 
-# --- MENGAMBIL API & KREDENSIAL DARI SECRETS ---
+# --- MENGAMBIL API, KREDENSIAL, & URL DARI SECRETS ---
 try:
     API_KEY = st.secrets["GEMINI_API_KEY"]
 except KeyError:
     API_KEY = None
+
+try:
+    SHEET_URL = st.secrets["SPREADSHEET_URL"]
+except KeyError:
+    SHEET_URL = None
 
 # --- FUNGSI PENDUKUNG ---
 @st.cache_data
@@ -41,13 +46,11 @@ def extract_text_from_pdf(file_bytes):
     return text
 
 def parse_filename(filename):
-    # Membersihkan ekstensi .pdf
     clean = re.sub(r'\.pdf$', '', filename, flags=re.IGNORECASE).strip()
-    # Memisahkan berdasarkan spasi terakhir (diasumsikan tahun)
     parts = clean.rsplit(' ', 1)
     if len(parts) == 2 and parts[1].isdigit():
         return parts[0], parts[1]
-    return clean, "-" # Jika tidak ada tahun, masukkan strip
+    return clean, "-"
 
 def calculate_readability(text):
     if not text.strip(): return {"Word Count": 0, "Sentence Count": 0, "Flesch Reading Ease": 0, "Gunning Fog": 0, "FK Grade": 0}
@@ -101,17 +104,15 @@ st.header("1. Persiapan Data")
 
 if not API_KEY:
     st.error("⚠️ **API Key belum diatur!** Cek pengaturan Secrets.")
+if not SHEET_URL:
+    st.warning("⚠️ **Link Spreadsheet belum diatur di Secrets!** Fitur sinkronisasi otomatis tidak akan berfungsi penuh.")
 
-col_upload, col_sheet = st.columns([1, 1])
-with col_upload:
-    uploaded_files = st.file_uploader("📂 Pilih Dokumen PDF (Contoh: ACES 2023.pdf)", type=['pdf'], accept_multiple_files=True)
-with col_sheet:
-    sheet_url = st.text_input("🔗 Link Google Spreadsheet Anda (Wajib diisi jika ingin fitur kirim):", placeholder="https://docs.google.com/spreadsheets/d/...")
+uploaded_files = st.file_uploader("📂 Pilih Dokumen PDF (Contoh: ACES 2023.pdf)", type=['pdf'], accept_multiple_files=True)
 
 # --- TOMBOL EKSEKUSI ---
 if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="primary"):
     if not API_KEY:
-        st.error("⚠️ Proses dihentikan. Atur GEMINI_API_KEY terlebih dahulu.")
+        st.error("⚠️ Proses dihentikan. Atur GEMINI_API_KEY di Secrets terlebih dahulu.")
     elif not uploaded_files or len(uploaded_files) < 2:
         st.error("⚠️ Mohon unggah minimal 2 dokumen untuk analisis perbandingan.")
     else:
@@ -125,7 +126,6 @@ if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="
                 documents[file.name] = text
                 
                 metrics = calculate_readability(text)
-                # Parsing nama file
                 emiten, tahun = parse_filename(file.name)
                 metrics['Nama Emiten'] = emiten
                 metrics['Tahun KAM'] = tahun
@@ -137,7 +137,6 @@ if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="
             df_read['Interpretasi Gunning Fog'] = df_read['Gunning Fog'].apply(interpret_grade)
             df_read['Interpretasi FK Grade'] = df_read['FK Grade'].apply(interpret_grade)
             
-            # Reorder Kolom agar Emiten dan Tahun di depan
             cols = ['Nama Emiten', 'Tahun KAM', 'Filename Asli', 'Word Count', 'Sentence Count', 'Flesch Reading Ease', 'Interpretasi Flesch', 'Gunning Fog', 'Interpretasi Gunning Fog', 'FK Grade', 'Interpretasi FK Grade']
             st.session_state['df_readability'] = df_read[cols]
             
@@ -147,7 +146,7 @@ if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="
             st.session_state['sim_matrix'] = sim_matrix
             
             boilerplate_insights = []
-            boilerplate_db = [] # Untuk dikirim ke Spreadsheet terpisah
+            boilerplate_db = []
             
             if sim_matrix is not None:
                 st.session_state['df_sim'] = pd.DataFrame(sim_matrix, index=st.session_state['doc_names'], columns=st.session_state['doc_names'])
@@ -158,7 +157,6 @@ if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="
                         interp = interpret_similarity(score)
                         boilerplate_insights.append(f"{doc_names[i]} vs {doc_names[j]} : {score:.2%} -> {interp}")
                         
-                        # Data rapi untuk database Boilerplate
                         emiten_a, tahun_a = parse_filename(doc_names[i])
                         emiten_b, tahun_b = parse_filename(doc_names[j])
                         boilerplate_db.append({
@@ -215,19 +213,17 @@ if st.session_state['is_processed']:
     st.divider()
     st.header("📤 Sinkronisasi ke Google Spreadsheet")
     if st.button("🚀 KIRIM DATA KE SPREADSHEET SEKARANG", type="primary"):
-        if not sheet_url:
-            st.error("⚠️ Masukkan Link Google Spreadsheet di kotak bagian Persiapan Data terlebih dahulu!")
+        if not SHEET_URL:
+            st.error("⚠️ Link Spreadsheet belum diatur di Streamlit Secrets! Silakan tambahkan 'SPREADSHEET_URL' terlebih dahulu.")
         else:
             try:
                 with st.spinner("Menghubungkan ke Google Server..."):
-                    # Akses Credentials dari Secrets
                     scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
                     skey = st.secrets["gcp_service_account"]
                     credentials = Credentials.from_service_account_info(skey, scopes=scopes)
                     client = gspread.authorize(credentials)
                     
-                    # Buka Spreadsheet
-                    sheet = client.open_by_url(sheet_url)
+                    sheet = client.open_by_url(SHEET_URL)
                     
                     # 1. Kirim ke Laporan Utama
                     try:
@@ -235,11 +231,9 @@ if st.session_state['is_processed']:
                     except gspread.exceptions.WorksheetNotFound:
                         ws_utama = sheet.add_worksheet(title="Laporan Utama", rows="1000", cols="20")
                     
-                    # Jika sheet kosong, tulis header
                     if not ws_utama.get_all_values():
                         ws_utama.append_row(df_final.columns.tolist())
                     
-                    # Bersihkan NaN/Float untuk gspread
                     df_final_clean = df_final.fillna("").astype(str)
                     ws_utama.append_rows(df_final_clean.values.tolist())
                     
