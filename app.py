@@ -12,9 +12,15 @@ from pdf2image import convert_from_bytes
 import pytesseract
 
 # Konfigurasi Halaman
-st.set_page_config(page_title="KAM Analyzer Pro (One-Click)", layout="wide", page_icon="🚀")
-st.title("🚀 KAM Analyzer Pro (One-Click Analysis)")
-st.markdown("Unggah 2-4 dokumen KAM Anda, masukkan API Key, dan biarkan sistem melakukan **ekstraksi, analisis readability, uji kemiripan (boilerplate), ringkasan AI, dan perbandingan komprehensif** dalam satu kali proses.")
+st.set_page_config(page_title="KAM Analyzer Pro (Auto-Key)", layout="wide", page_icon="🚀")
+st.title("🚀 KAM Analyzer Pro (Auto-Key)")
+st.markdown("Unggah 2-4 dokumen KAM Anda. Sistem akan otomatis menggunakan API Key yang tersimpan di server untuk melakukan **ekstraksi, analisis readability, uji kemiripan (boilerplate), ringkasan AI, dan perbandingan komprehensif**.")
+
+# --- MENGAMBIL API KEY DARI STREAMLIT SECRETS ---
+try:
+    API_KEY = st.secrets["GEMINI_API_KEY"]
+except KeyError:
+    API_KEY = None
 
 # --- FUNGSI PENDUKUNG ---
 @st.cache_data
@@ -43,7 +49,6 @@ def calculate_readability(text):
         "FK Grade": textstat.flesch_kincaid_grade(text)
     }
 
-# FUNGSI INTERPRETASI ANGKA
 def interpret_flesch(score):
     if score >= 60: return "Mudah (Bahasa Standar)"
     elif score >= 30: return "Sulit (Bahasa Formal/Bisnis)"
@@ -83,18 +88,19 @@ if 'is_processed' not in st.session_state:
 
 # --- AREA INPUT ---
 st.header("1. Persiapan Data")
-col_api, col_upload = st.columns([1, 2])
-with col_api:
-    api_key = st.text_input("🔑 Masukkan Google Gemini API Key:", type="password")
-with col_upload:
-    uploaded_files = st.file_uploader("📂 Pilih Dokumen PDF (Disarankan 2-4 File KAM)", type=['pdf'], accept_multiple_files=True)
+
+# Jika API Key belum disetting di Streamlit Cloud, tampilkan peringatan
+if not API_KEY:
+    st.error("⚠️ **API Key belum diatur!** Silakan buka pengaturan Streamlit Cloud (Manage App -> Settings -> Secrets) dan tambahkan `GEMINI_API_KEY = 'kunci_anda_disini'`.")
+
+uploaded_files = st.file_uploader("📂 Pilih Dokumen PDF (Disarankan 2-4 File KAM)", type=['pdf'], accept_multiple_files=True)
 
 # --- TOMBOL EKSEKUSI ---
 if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="primary"):
-    if not api_key:
-        st.error("⚠️ Masukkan API Key terlebih dahulu bos!")
+    if not API_KEY:
+        st.error("⚠️ Proses dihentikan. Silakan atur GEMINI_API_KEY di menu Secrets Streamlit Cloud terlebih dahulu bos!")
     elif not uploaded_files or len(uploaded_files) < 2:
-        st.error("⚠️ Mohon unggah minimal 2 dokumen agar fitur perbandingan bisa berjalan.")
+        st.error("⚠️ Mohon unggah minimal 2 dokumen agar fitur perbandingan bisa berjalan secara optimal.")
     else:
         st.session_state['doc_names'] = [f.name for f in uploaded_files]
         documents = {}
@@ -111,17 +117,14 @@ if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="
                 results_readability.append(metrics)
                 
             df_read = pd.DataFrame(results_readability)
-            
-            # Tambahkan Interpretasi Readability
             df_read['Interpretasi Flesch'] = df_read['Flesch Reading Ease'].apply(interpret_flesch)
             df_read['Interpretasi Gunning Fog'] = df_read['Gunning Fog'].apply(interpret_grade)
             df_read['Interpretasi FK Grade'] = df_read['FK Grade'].apply(interpret_grade)
             
-            # Susun ulang kolom
             cols = ['Filename', 'Word Count', 'Sentence Count', 'Flesch Reading Ease', 'Interpretasi Flesch', 'Gunning Fog', 'Interpretasi Gunning Fog', 'FK Grade', 'Interpretasi FK Grade']
             st.session_state['df_readability'] = df_read[cols]
             
-        # 2. Boilerplate Analysis (Kemiripan)
+        # 2. Boilerplate Analysis
         with st.spinner("⏳ [2/4] Menganalisis kemiripan dokumen (Boilerplate)..."):
             doc_texts = list(documents.values())
             sim_matrix = calculate_similarity(doc_texts)
@@ -130,7 +133,6 @@ if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="
             boilerplate_insights = []
             if sim_matrix is not None:
                 st.session_state['df_sim'] = pd.DataFrame(sim_matrix, index=st.session_state['doc_names'], columns=st.session_state['doc_names'])
-                # Buat interpretasi teks antar pasangan dokumen
                 doc_names = st.session_state['doc_names']
                 for i in range(len(doc_names)):
                     for j in range(i + 1, len(doc_names)):
@@ -142,7 +144,7 @@ if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="
 
         # 3. AI Summaries & Comparison
         with st.spinner("⏳ [3/4] AI sedang membaca dan menyusun ringkasan..."):
-            genai.configure(api_key=api_key)
+            genai.configure(api_key=API_KEY)
             model = genai.GenerativeModel('gemini-2.5-flash')
             
             summaries = {}
@@ -152,7 +154,7 @@ if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="
                     res = model.generate_content(prompt_sum)
                     summaries[name] = res.text
                 except Exception as e:
-                    summaries[name] = f"Error: {e}"
+                    summaries[name] = f"Error menghubungi AI: {e}. Pastikan API Key di Secrets valid."
             st.session_state['ai_summaries'] = summaries
             
             combined_texts = ""
@@ -172,7 +174,7 @@ if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="
                 res_comp = model.generate_content(prompt_comp)
                 st.session_state['ai_comparison'] = res_comp.text
             except Exception as e:
-                st.session_state['ai_comparison'] = f"Error Perbandingan: {e}"
+                st.session_state['ai_comparison'] = f"Error Perbandingan AI: {e}. Pastikan API Key di Secrets valid."
 
         # 4. Generate Excel
         with st.spinner("⏳ [4/4] Menyusun laporan Excel..."):
@@ -181,7 +183,6 @@ if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="
                 df_final = st.session_state['df_readability'].copy()
                 df_final['AI Summary'] = df_final['Filename'].map(st.session_state['ai_summaries'])
                 
-                # Tambahkan Boilerplate Insight dan AI Comparison di baris pertama
                 df_final['Interpretasi Boilerplate (Keseluruhan)'] = ""
                 df_final.loc[0, 'Interpretasi Boilerplate (Keseluruhan)'] = st.session_state['boilerplate_insights']
                 
