@@ -8,24 +8,32 @@ from sklearn.metrics.pairwise import cosine_similarity
 import plotly.express as px
 import io
 import re
-import time  # <-- Ditambahkan untuk memberi jeda pada AI
-import google.generativeai as genai
+import time 
 from pdf2image import convert_from_bytes
 import pytesseract
 import gspread
 from google.oauth2.service_account import Credentials
 
+# Import Library AI
+import google.generativeai as genai
+from groq import Groq
+from openai import OpenAI
+
 # Konfigurasi Halaman
-st.set_page_config(page_title="KAM Analyzer Pro (Sheets & Download)", layout="wide", page_icon="🚀")
-st.title("🚀 KAM Analyzer Pro (Sheets & Download)")
-st.markdown("Unggah dokumen KAM Anda (Format: **NAMA EMITEN TAHUN.pdf**, contoh: `ACES 2023.pdf`). Sistem akan memproses, Anda bisa mengunduh hasilnya, atau mengirimkannya langsung ke Spreadsheet.")
+st.set_page_config(page_title="KAM Analyzer Pro (Multi-AI)", layout="wide", page_icon="🚀")
+st.title("🚀 KAM Analyzer Pro (Multi-AI & Manual Key)")
+st.markdown("Unggah dokumen KAM Anda. Sistem akan memproses, dan Anda bisa mengatur API Key serta penyedia AI secara manual di menu samping.")
 
-# --- MENGAMBIL API, KREDENSIAL, & URL DARI SECRETS ---
-try:
-    API_KEY = st.secrets["GEMINI_API_KEY"]
-except KeyError:
-    API_KEY = None
+# --- SIDEBAR: PENGATURAN AI MANUAL ---
+with st.sidebar:
+    st.header("⚙️ Pengaturan AI")
+    ai_provider = st.selectbox("Pilih Penyedia AI", ["Google Gemini", "Groq (Llama 3)", "OpenAI (GPT)"])
+    
+    api_key_input = st.text_input(f"Masukkan API Key {ai_provider}", type="password")
+    
+    st.info("💡 API Key tidak disimpan di server. Aman dan akan hilang saat halaman dimuat ulang.")
 
+# --- MENGAMBIL URL DARI SECRETS (HANYA UNTUK SPREADSHEET) ---
 try:
     SHEET_URL = st.secrets["SPREADSHEET_URL"]
 except KeyError:
@@ -85,6 +93,35 @@ def calculate_similarity(texts):
         return cosine_similarity(tfidf_matrix)
     except ValueError: return None
 
+# --- FUNGSI GENERATE MULTI-AI ---
+def generate_ai_content(prompt, provider, api_key):
+    if not api_key:
+        return "⚠️ Error: API Key belum dimasukkan."
+    try:
+        if provider == "Google Gemini":
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel('gemini-2.5-flash')
+            return model.generate_content(prompt).text
+            
+        elif provider == "Groq (Llama 3)":
+            client = Groq(api_key=api_key)
+            chat = client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model="llama-3.3-70b-versatile"
+            )
+            return chat.choices[0].message.content
+            
+        elif provider == "OpenAI (GPT)":
+            client = OpenAI(api_key=api_key)
+            chat = client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model="gpt-4o-mini"
+            )
+            return chat.choices[0].message.content
+            
+    except Exception as e:
+        return f"❌ Error API ({provider}): {str(e)}"
+
 # --- INISIALISASI SESSION STATE ---
 if 'is_processed' not in st.session_state:
     st.session_state.update({
@@ -103,8 +140,6 @@ if 'is_processed' not in st.session_state:
 # --- AREA INPUT ---
 st.header("1. Persiapan Data")
 
-if not API_KEY:
-    st.error("⚠️ **API Key belum diatur!** Cek pengaturan Secrets.")
 if not SHEET_URL:
     st.warning("⚠️ **Link Spreadsheet belum diatur di Secrets!** Fitur sinkronisasi otomatis tidak akan berfungsi penuh.")
 
@@ -112,8 +147,8 @@ uploaded_files = st.file_uploader("📂 Pilih Dokumen PDF (Contoh: ACES 2023.pdf
 
 # --- TOMBOL EKSEKUSI ---
 if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="primary"):
-    if not API_KEY:
-        st.error("⚠️ Proses dihentikan. Atur GEMINI_API_KEY di Secrets terlebih dahulu.")
+    if not api_key_input:
+        st.error(f"⚠️ Proses dihentikan. Masukkan API Key untuk {ai_provider} di menu sebelah kiri terlebih dahulu.")
     elif not uploaded_files or len(uploaded_files) < 2:
         st.error("⚠️ Mohon unggah minimal 2 dokumen untuk analisis perbandingan.")
     else:
@@ -172,28 +207,19 @@ if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="
             st.session_state['boilerplate_insights'] = "\n".join(boilerplate_insights)
             st.session_state['df_boilerplate_db'] = pd.DataFrame(boilerplate_db)
 
-        with st.spinner("⏳ [3/4] AI sedang menyusun ringkasan (Menambahkan jeda anti-limit)..."):
-            genai.configure(api_key=API_KEY)
-            model = genai.GenerativeModel('gemini-2.5-flash')
-            
+        with st.spinner(f"⏳ [3/4] AI ({ai_provider}) sedang menyusun ringkasan..."):
             summaries = {}
             for name, text in documents.items():
-                try:
-                    res = model.generate_content(f"Ringkas Key Audit Matters berikut secara eksekutif (1. Fokus Audit, 2. Alasan, 3. Respons):\n\n{text}")
-                    summaries[name] = res.text
-                    time.sleep(4) # <-- Mencegah Error 429 Quota Exceeded
-                except Exception as e:
-                    summaries[name] = f"Error: {e}"
+                prompt_summary = f"Ringkas Key Audit Matters berikut secara eksekutif (1. Fokus Audit, 2. Alasan, 3. Respons):\n\n{text}"
+                summaries[name] = generate_ai_content(prompt_summary, ai_provider, api_key_input)
+                time.sleep(2) # Jeda untuk menghindari rate limit
             st.session_state['ai_summaries'] = summaries
             
             combined_texts = ""
             for name, text in documents.items(): combined_texts += f"\n\n### Dokumen: {name}\n{text}\n"
-            try:
-                time.sleep(4) # <-- Mencegah Error 429 sebelum request perbandingan
-                res_comp = model.generate_content(f"Anda auditor senior. Buat analisis perbandingan dari dokumen berikut. Format: Persamaan Risiko Utama, Perbedaan Signifikan, Insight Komparatif:\n{combined_texts}")
-                st.session_state['ai_comparison'] = res_comp.text
-            except Exception as e:
-                st.session_state['ai_comparison'] = f"Error Perbandingan AI: {e}"
+            
+            prompt_comp = f"Anda auditor senior. Buat analisis perbandingan dari dokumen berikut. Format: Persamaan Risiko Utama, Perbedaan Signifikan, Insight Komparatif:\n{combined_texts}"
+            st.session_state['ai_comparison'] = generate_ai_content(prompt_comp, ai_provider, api_key_input)
 
         with st.spinner("⏳ [4/4] Menyusun memori data..."):
             st.session_state['is_processed'] = True
@@ -214,7 +240,6 @@ if st.session_state['is_processed']:
 
     # --- MEMBUAT FILE EXCEL DI MEMORI UNTUK DOWNLOAD ---
     output_excel = io.BytesIO()
-    # <-- Menggunakan openpyxl agar kompatibel dengan requirements.txt Anda
     with pd.ExcelWriter(output_excel, engine='openpyxl') as writer: 
         df_final.to_excel(writer, index=False, sheet_name='Laporan Utama')
         df_boiler.to_excel(writer, index=False, sheet_name='Data Boilerplate')
@@ -223,7 +248,6 @@ if st.session_state['is_processed']:
     st.divider()
     st.header("📤 Ekspor & Sinkronisasi Data")
     
-    # MEMBUAT TOMBOL BERDAMPINGAN
     col_btn1, col_btn2 = st.columns(2)
     
     with col_btn1:
