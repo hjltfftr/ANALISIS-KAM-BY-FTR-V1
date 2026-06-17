@@ -214,7 +214,7 @@ if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="
         with st.spinner("⏳ [3/4] AI sedang menyusun ringkasan (Mencoba Gemini, bersiap Groq)..."):
             summaries = {}
             for name, text in documents.items():
-                prompt_summary = f"""Anda adalah gabungan seorang Auditor Senior dan Analis Ekuitas Pasar Modal. Ekstrak Key Audit Matters (KAM) berikut dengan singkat dan tajam dengan total ringkasan maksimal 3500 kata:
+                prompt_summary = f"""Anda adalah gabungan seorang Auditor Senior dan Analis Ekuitas Pasar Modal. Ekstrak Key Audit Matters (KAM) berikut dengan singkat dan tajam dengan total ringkasan maksimal 2000 kata:
 1. Fokus Audit & Alasan: (Apa yang disorot dan kenapa auditor menganggap ini krusial?)
 2. Respons Auditor: (Langkah apa yang dilakukan auditor?)
 3. Radar Risiko: (Secara fundamental, apa ancaman dari poin ini terhadap likuiditas, laba, atau kelangsungan usaha emiten?)
