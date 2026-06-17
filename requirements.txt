@@ -13,3 +13,4 @@ pytesseract
 Pillow
 gspread
 google-auth
+xlsxwriter
