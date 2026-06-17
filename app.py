@@ -17,21 +17,20 @@ from google.oauth2.service_account import Credentials
 # Import Library AI
 import google.generativeai as genai
 from groq import Groq
-from openai import OpenAI
 
 # Konfigurasi Halaman
-st.set_page_config(page_title="KAM Analyzer Pro (Multi-AI)", layout="wide", page_icon="🚀")
-st.title("🚀 KAM Analyzer Pro (Multi-AI & Manual Key)")
-st.markdown("Unggah dokumen KAM Anda. Sistem akan memproses, dan Anda bisa mengatur API Key serta penyedia AI secara manual di menu samping.")
+st.set_page_config(page_title="KAM Analyzer Pro (Auto-Fallback)", layout="wide", page_icon="🚀")
+st.title("🚀 KAM Analyzer Pro (Auto-Fallback AI)")
+st.markdown("Unggah dokumen KAM Anda. Sistem otomatis menggunakan **Gemini** terlebih dahulu, dan akan berpindah ke **Groq** jika terkena limit.")
 
-# --- SIDEBAR: PENGATURAN AI MANUAL ---
+# --- SIDEBAR: PENGATURAN API KEY MANUAL ---
 with st.sidebar:
-    st.header("⚙️ Pengaturan AI")
-    ai_provider = st.selectbox("Pilih Penyedia AI", ["Google Gemini", "Groq (Llama 3)", "OpenAI (GPT)"])
+    st.header("⚙️ Pengaturan API Key")
+    st.write("Masukkan Key Anda di bawah ini:")
+    gemini_key_input = st.text_input("🔑 API Key Google Gemini (Utama)", type="password")
+    groq_key_input = st.text_input("🔑 API Key Groq (Cadangan)", type="password")
     
-    api_key_input = st.text_input(f"Masukkan API Key {ai_provider}", type="password")
-    
-    st.info("💡 API Key tidak disimpan di server. Aman dan akan hilang saat halaman dimuat ulang.")
+    st.info("💡 Sistem akan mencoba Gemini dulu. Jika limit (Error 429), otomatis pindah pakai Llama-3 (Groq).")
 
 # --- MENGAMBIL URL DARI SECRETS (HANYA UNTUK SPREADSHEET) ---
 try:
@@ -93,34 +92,38 @@ def calculate_similarity(texts):
         return cosine_similarity(tfidf_matrix)
     except ValueError: return None
 
-# --- FUNGSI GENERATE MULTI-AI ---
-def generate_ai_content(prompt, provider, api_key):
-    if not api_key:
-        return "⚠️ Error: API Key belum dimasukkan."
-    try:
-        if provider == "Google Gemini":
-            genai.configure(api_key=api_key)
+# --- FUNGSI GENERATE DENGAN AUTO-FALLBACK ---
+def generate_ai_with_fallback(prompt, gemini_key, groq_key):
+    if not gemini_key and not groq_key:
+        return "⚠️ Error: Anda belum memasukkan API Key sama sekali."
+    
+    # 1. Coba pakai Google Gemini terlebih dahulu
+    if gemini_key:
+        try:
+            genai.configure(api_key=gemini_key)
             model = genai.GenerativeModel('gemini-2.5-flash')
             return model.generate_content(prompt).text
-            
-        elif provider == "Groq (Llama 3)":
-            client = Groq(api_key=api_key)
+        except Exception as e:
+            error_msg = str(e).lower()
+            # Jika tidak ada key Groq, kembalikan error Gemini
+            if not groq_key:
+                return f"❌ Error Gemini: {e} (Groq Key tidak diisi untuk cadangan)"
+            # Jika error (termasuk 429 Quota), diam-diam lanjut ke blok Groq di bawah
+            pass
+
+    # 2. Jika Gemini gagal (atau tidak diisi), pakai Groq
+    if groq_key:
+        try:
+            client = Groq(api_key=groq_key)
             chat = client.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
                 model="llama-3.3-70b-versatile"
             )
             return chat.choices[0].message.content
+        except Exception as e:
+            return f"❌ Error Groq: {str(e)}"
             
-        elif provider == "OpenAI (GPT)":
-            client = OpenAI(api_key=api_key)
-            chat = client.chat.completions.create(
-                messages=[{"role": "user", "content": prompt}],
-                model="gpt-4o-mini"
-            )
-            return chat.choices[0].message.content
-            
-    except Exception as e:
-        return f"❌ Error API ({provider}): {str(e)}"
+    return "❌ Gagal memproses AI."
 
 # --- INISIALISASI SESSION STATE ---
 if 'is_processed' not in st.session_state:
@@ -147,8 +150,8 @@ uploaded_files = st.file_uploader("📂 Pilih Dokumen PDF (Contoh: ACES 2023.pdf
 
 # --- TOMBOL EKSEKUSI ---
 if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="primary"):
-    if not api_key_input:
-        st.error(f"⚠️ Proses dihentikan. Masukkan API Key untuk {ai_provider} di menu sebelah kiri terlebih dahulu.")
+    if not gemini_key_input and not groq_key_input:
+        st.error("⚠️ Proses dihentikan. Masukkan minimal satu API Key (Gemini atau Groq) di menu sebelah kiri.")
     elif not uploaded_files or len(uploaded_files) < 2:
         st.error("⚠️ Mohon unggah minimal 2 dokumen untuk analisis perbandingan.")
     else:
@@ -207,19 +210,45 @@ if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="
             st.session_state['boilerplate_insights'] = "\n".join(boilerplate_insights)
             st.session_state['df_boilerplate_db'] = pd.DataFrame(boilerplate_db)
 
-        with st.spinner(f"⏳ [3/4] AI ({ai_provider}) sedang menyusun ringkasan..."):
+        with st.spinner(f"⏳ [3/4] AI sedang menyusun ringkasan (Mencoba Gemini, bersiap Groq)..."):
             summaries = {}
             for name, text in documents.items():
-                prompt_summary = f"Ringkas Key Audit Matters berikut secara eksekutif (1. Fokus Audit, 2. Alasan, 3. Respons):\n\n{text}"
-                summaries[name] = generate_ai_content(prompt_summary, ai_provider, api_key_input)
-                time.sleep(2) # Jeda untuk menghindari rate limit
+                prompt_summary = f"""Anda adalah gabungan seorang Auditor Senior dan Analis Ekuitas Pasar Modal. Ekstrak Key Audit Matters (KAM) berikut dengan singkat dan tajam:
+1. Fokus Audit & Alasan: (Apa yang disorot dan kenapa auditor menganggap ini krusial?)
+2. Respons Auditor: (Langkah apa yang dilakukan auditor?)
+3. Radar Risiko: (Secara fundamental, apa ancaman dari poin ini terhadap likuiditas, laba, atau kelangsungan usaha emiten?)
+
+Teks KAM:
+{text}"""
+                summaries[name] = generate_ai_with_fallback(prompt_summary, gemini_key_input, groq_key_input)
+                time.sleep(2) # Jeda aman
             st.session_state['ai_summaries'] = summaries
             
             combined_texts = ""
             for name, text in documents.items(): combined_texts += f"\n\n### Dokumen: {name}\n{text}\n"
             
-            prompt_comp = f"Anda auditor senior. Buat analisis perbandingan dari dokumen berikut. Format: Persamaan Risiko Utama, Perbedaan Signifikan, Insight Komparatif:\n{combined_texts}"
-            st.session_state['ai_comparison'] = generate_ai_content(prompt_comp, ai_provider, api_key_input)
+            prompt_comp = f"""Anda adalah pakar Gabungan (Auditor Senior & Analis Ekuitas Spesialis IHSG). Analisis komparatif dari kumpulan dokumen Key Audit Matters (KAM) berikut untuk mencari anomali fundamental yang bisa menggerakkan harga saham. 
+
+Gunakan format baku berikut:
+
+1. Persamaan:
+(Jelaskan isu apa saja yang sama/berulang antar dokumen. Apakah ini memang risiko wajar di sektornya, atau sekadar template/boilerplate dari tahun ke tahun?)
+
+2. Perbedaan Signifikan:
+(Jelaskan secara tajam perbedaan isi KAM antar dokumen atau antar tahun. Adakah akun spesifik, metodologi, atau peringatan auditor yang muncul di satu laporan tapi tidak ada di laporan lain?)
+
+3. Dampak yang Mungkin Terjadi (Market Reaction):
+(Berikan analisis YoY/komparatif. Contoh: Karena laporan terbaru menyoroti masalah ini, sentimen pasar akan bergeser menjadi...)
+
+4. Informasi Penting Lainnya (Insight Pelaku Pasar):
+(Berikan peringatan spesifik dari temuan ini bagi:
+- Investor Institusi / Smart Money: Akumulasi atau Distribusi?
+- Ritel: Risiko jebakan psikologis/FOMO?
+- Bandar / Market Maker: Momen kerek harga atau buang barang?)
+
+Teks Dokumen:
+{combined_texts}"""
+            st.session_state['ai_comparison'] = generate_ai_with_fallback(prompt_comp, gemini_key_input, groq_key_input)
 
         with st.spinner("⏳ [4/4] Menyusun memori data..."):
             st.session_state['is_processed'] = True
@@ -310,7 +339,7 @@ if st.session_state['is_processed']:
     st.header("🔍 2. Kemiripan Teks (Boilerplate Log)")
     st.dataframe(df_boiler, use_container_width=True)
         
-    st.header("🤖 3. Hasil AI")
+    st.header("🤖 3. Hasil AI (Fundamental & Market Insight)")
     col_sum, col_comp = st.columns([1, 1])
     with col_sum:
         st.subheader("Ringkasan Per Dokumen")
