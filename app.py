@@ -117,13 +117,13 @@ def generate_ai_with_fallback(prompt, gemini_key, groq_key):
                 return f"❌ Error Gemini: {e} (Groq Key tidak tersedia untuk cadangan)"
             pass # Jika error limit, lanjut diam-diam ke Groq
 
-    # 2. Jika Gemini gagal, pakai Groq (Model 8B yang limitnya lebih longgar)
+    # 2. Jika Gemini gagal, pakai Groq (Model 8B yang limitnya longgar & cepat)
     if groq_key:
         try:
             client = Groq(api_key=groq_key)
             chat = client.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
-                model="llama-3.1-8b-instant" # DIUBAH KE MODEL YANG LEBIH HEMAT DAN CEPAT
+                model="llama-3.1-8b-instant" 
             )
             return chat.choices[0].message.content
         except Exception as e:
@@ -224,13 +224,14 @@ if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="
                 
                 # BERSIHKAN TEKS SEBELUM MASUK PROMPT
                 cleaned_text = clean_text_for_ai(text)
+                emiten_name, tahun_doc = parse_filename(name)
                 
                 prompt_summary = f"""
 Peran:
 Anda adalah gabungan Auditor Senior Big Four, Financial Statement Analyst, dan Equity Research Analyst.
 
 Tugas:
-Lakukan ekstraksi menyeluruh terhadap Key Audit Matters (KAM) berikut.
+Lakukan ekstraksi menyeluruh terhadap Key Audit Matters (KAM) dari Emiten {emiten_name} untuk Tahun Buku {tahun_doc}.
 
 JANGAN membuat ringkasan terlalu pendek.
 JANGAN menghilangkan informasi penting.
@@ -329,52 +330,55 @@ KAM:
                 time.sleep(2) 
             st.session_state['ai_summaries'] = summaries
             
-            # MENGGABUNGKAN HASIL RINGKASAN (BUKAN PDF ASLI) UNTUK DIANALISIS
+            # --- MENYUSUN DATA PERBANDINGAN SECARA KRONOLOGIS ---
             combined_summaries = ""
             for name, summary in summaries.items(): 
-                combined_summaries += f"\n\n### Dokumen: {name}\n{summary}\n"
+                emiten_name, tahun_doc = parse_filename(name)
+                combined_summaries += f"\n\n=========================================\n"
+                combined_summaries += f"DATA KAM UNTUK EMITEN: {emiten_name}\n"
+                combined_summaries += f"TAHUN BUKU / PERIODE: {tahun_doc}\n"
+                combined_summaries += f"=========================================\n"
+                combined_summaries += f"{summary}\n"
             
             prompt_comp = f"""
 Peran:
 Auditor Senior + Equity Strategist + Fund Manager IHSG.
 
-Analisis seluruh dokumen KAM berikut untuk menemukan perubahan risiko fundamental yang berpotensi memengaruhi harga saham.
+Tugas:
+Analisis dan bandingkan seluruh data Ringkasan KAM yang tersedia di bawah ini secara kronologis (tahun demi tahun) untuk menemukan perubahan tren risiko fundamental yang berpotensi memengaruhi harga saham. 
+
+*Catatan: Anda harus menganalisis semua tahun/dokumen yang dilampirkan secara komprehensif, baik itu berjumlah 2 dokumen, 3 dokumen, atau lebih.*
 
 Fokus hanya pada informasi yang material.
 
 Output:
 
 # Persamaan Utama
-- Risiko yang muncul berulang
+- Risiko yang muncul berulang dari tahun ke tahun
 - Indikasi boilerplate atau tidak
-- Risiko yang memang lazim pada industri
+- Risiko yang memang lazim pada industri tersebut
 
-# Perubahan Material
-Identifikasi:
-- Akun baru yang menjadi KAM
-- Akun yang hilang dari KAM
-- Peningkatan risiko
-- Penurunan risiko
-- Perubahan judgement manajemen
-- Perubahan prosedur audit
+# Perubahan Material & Tren Tahunan
+Identifikasi perkembangan dari tahun terlama hingga tahun terbaru:
+- Akun baru yang menjadi KAM di tahun tertentu
+- Akun yang berhasil dihilangkan dari KAM
+- Peningkatan intensitas risiko antar tahun
+- Penurunan intensitas risiko antar tahun
+- Perubahan judgement manajemen dari periode ke periode
+- Perubahan prosedur audit yang dilakukan oleh auditor
 
-# Skor Perubahan Risiko
+# Skor Perubahan Risiko (Matriks Tren)
 
-Berikan penilaian:
-- Risiko Laba
-- Risiko Arus Kas
-- Risiko Likuiditas
-- Risiko Solvabilitas
-- Risiko Going Concern
-
-Kategori:
-- Naik
-- Tetap
-- Turun
+Berikan penilaian perbandingan arah risiko (misal: Tahun A ke Tahun B ke Tahun C):
+- Risiko Laba: (Naik / Tetap / Turun)
+- Risiko Arus Kas: (Naik / Tetap / Turun)
+- Risiko Likuiditas: (Naik / Tetap / Turun)
+- Risiko Solvabilitas: (Naik / Tetap / Turun)
+- Risiko Going Concern: (Naik / Tetap / Turun)
 
 # Implikasi Fundamental
 
-Analisis dampak potensial terhadap:
+Analisis dampak potensial perkembangan risiko ini terhadap target kinerja masa depan:
 - Pendapatan
 - Margin
 - Cash Flow
@@ -393,24 +397,23 @@ Analisis dampak potensial terhadap:
 
 # Early Warning Signal
 
-Tuliskan poin-poin paling penting yang perlu diperhatikan investor pada laporan terbaru.
+Tuliskan poin-poin paling penting yang paling krusial bagi investor berdasarkan tren data laporan keuangan terbaru.
 
-# Kesimpulan Investasi
+# Kesimpulan Investasi & Outlook
 
 Pilih salah satu:
 - Positif
 - Netral
 - Negatif
 
-Jelaskan alasan utama secara rinci.
+Jelaskan argumentasi utama Anda secara rinci berdasarkan pergeseran risiko dari tahun ke tahun.
 
 Aturan:
-- Jangan mengulang isi KAM.
-- Fokus pada perubahan dan implikasinya.
-- Prioritaskan insight daripada deskripsi.
+- Jangan mengulang isi KAM secara mentah. Fokuslah pada dinamika perubahan dan implikasinya.
+- Prioritaskan komparasi kronologis dan insight yang actionable bagi pengelola dana / investor.
 - Maksimal 1200 kata.
 
-Dokumen Ringkasan:
+Dokumen Ringkasan Berdasarkan Tahun dan Emiten:
 {combined_summaries}
 """
             st.session_state['ai_comparison'] = generate_ai_with_fallback(prompt_comp, GEMINI_KEY, GROQ_KEY)
