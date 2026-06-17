@@ -8,6 +8,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 import plotly.express as px
 import io
 import re
+import time  # <-- Ditambahkan untuk memberi jeda pada AI
 import google.generativeai as genai
 from pdf2image import convert_from_bytes
 import pytesseract
@@ -171,7 +172,7 @@ if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="
             st.session_state['boilerplate_insights'] = "\n".join(boilerplate_insights)
             st.session_state['df_boilerplate_db'] = pd.DataFrame(boilerplate_db)
 
-        with st.spinner("⏳ [3/4] AI sedang menyusun ringkasan..."):
+        with st.spinner("⏳ [3/4] AI sedang menyusun ringkasan (Menambahkan jeda anti-limit)..."):
             genai.configure(api_key=API_KEY)
             model = genai.GenerativeModel('gemini-2.5-flash')
             
@@ -180,6 +181,7 @@ if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="
                 try:
                     res = model.generate_content(f"Ringkas Key Audit Matters berikut secara eksekutif (1. Fokus Audit, 2. Alasan, 3. Respons):\n\n{text}")
                     summaries[name] = res.text
+                    time.sleep(4) # <-- Mencegah Error 429 Quota Exceeded
                 except Exception as e:
                     summaries[name] = f"Error: {e}"
             st.session_state['ai_summaries'] = summaries
@@ -187,6 +189,7 @@ if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="
             combined_texts = ""
             for name, text in documents.items(): combined_texts += f"\n\n### Dokumen: {name}\n{text}\n"
             try:
+                time.sleep(4) # <-- Mencegah Error 429 sebelum request perbandingan
                 res_comp = model.generate_content(f"Anda auditor senior. Buat analisis perbandingan dari dokumen berikut. Format: Persamaan Risiko Utama, Perbedaan Signifikan, Insight Komparatif:\n{combined_texts}")
                 st.session_state['ai_comparison'] = res_comp.text
             except Exception as e:
@@ -211,7 +214,8 @@ if st.session_state['is_processed']:
 
     # --- MEMBUAT FILE EXCEL DI MEMORI UNTUK DOWNLOAD ---
     output_excel = io.BytesIO()
-    with pd.ExcelWriter(output_excel, engine='xlsxwriter') as writer: # Memastikan penulisan Excel optimal
+    # <-- Menggunakan openpyxl agar kompatibel dengan requirements.txt Anda
+    with pd.ExcelWriter(output_excel, engine='openpyxl') as writer: 
         df_final.to_excel(writer, index=False, sheet_name='Laporan Utama')
         df_boiler.to_excel(writer, index=False, sheet_name='Data Boilerplate')
     excel_data = output_excel.getvalue()
