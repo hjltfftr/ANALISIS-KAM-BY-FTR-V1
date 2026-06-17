@@ -15,9 +15,9 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 # Konfigurasi Halaman
-st.set_page_config(page_title="KAM Analyzer Pro (Sheets Sync)", layout="wide", page_icon="🚀")
-st.title("🚀 KAM Analyzer Pro (Direct to Sheets)")
-st.markdown("Unggah dokumen KAM Anda (Format: **NAMA EMITEN TAHUN.pdf**, contoh: `ACES 2023.pdf`). Sistem akan memproses dan otomatis mengirimkan hasilnya ke Google Spreadsheet Anda.")
+st.set_page_config(page_title="KAM Analyzer Pro (Sheets & Download)", layout="wide", page_icon="🚀")
+st.title("🚀 KAM Analyzer Pro (Sheets & Download)")
+st.markdown("Unggah dokumen KAM Anda (Format: **NAMA EMITEN TAHUN.pdf**, contoh: `ACES 2023.pdf`). Sistem akan memproses, Anda bisa mengunduh hasilnya, atau mengirimkannya langsung ke Spreadsheet.")
 
 # --- MENGAMBIL API, KREDENSIAL, & URL DARI SECRETS ---
 try:
@@ -195,7 +195,7 @@ if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="
         with st.spinner("⏳ [4/4] Menyusun memori data..."):
             st.session_state['is_processed'] = True
 
-# --- AREA HASIL & SPREADSHEET SYNC ---
+# --- AREA HASIL, DOWNLOAD, & SPREADSHEET SYNC ---
 if st.session_state['is_processed']:
     st.success("✅ Analisis Berhasil!")
     
@@ -209,49 +209,70 @@ if st.session_state['is_processed']:
     
     df_boiler = st.session_state['df_boilerplate_db'].copy()
 
-    # TOMBOL KIRIM KE SPREADSHEET
+    # --- MEMBUAT FILE EXCEL DI MEMORI UNTUK DOWNLOAD ---
+    output_excel = io.BytesIO()
+    with pd.ExcelWriter(output_excel, engine='xlsxwriter') as writer: # Memastikan penulisan Excel optimal
+        df_final.to_excel(writer, index=False, sheet_name='Laporan Utama')
+        df_boiler.to_excel(writer, index=False, sheet_name='Data Boilerplate')
+    excel_data = output_excel.getvalue()
+
     st.divider()
-    st.header("📤 Sinkronisasi ke Google Spreadsheet")
-    if st.button("🚀 KIRIM DATA KE SPREADSHEET SEKARANG", type="primary"):
-        if not SHEET_URL:
-            st.error("⚠️ Link Spreadsheet belum diatur di Streamlit Secrets! Silakan tambahkan 'SPREADSHEET_URL' terlebih dahulu.")
-        else:
-            try:
-                with st.spinner("Menghubungkan ke Google Server..."):
-                    scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-                    skey = st.secrets["gcp_service_account"]
-                    credentials = Credentials.from_service_account_info(skey, scopes=scopes)
-                    client = gspread.authorize(credentials)
-                    
-                    sheet = client.open_by_url(SHEET_URL)
-                    
-                    # 1. Kirim ke Laporan Utama
-                    try:
-                        ws_utama = sheet.worksheet("Laporan Utama")
-                    except gspread.exceptions.WorksheetNotFound:
-                        ws_utama = sheet.add_worksheet(title="Laporan Utama", rows="1000", cols="20")
-                    
-                    if not ws_utama.get_all_values():
-                        ws_utama.append_row(df_final.columns.tolist())
-                    
-                    df_final_clean = df_final.fillna("").astype(str)
-                    ws_utama.append_rows(df_final_clean.values.tolist())
-                    
-                    # 2. Kirim ke Data Boilerplate
-                    try:
-                        ws_boiler = sheet.worksheet("Data Boilerplate")
-                    except gspread.exceptions.WorksheetNotFound:
-                        ws_boiler = sheet.add_worksheet(title="Data Boilerplate", rows="1000", cols="10")
+    st.header("📤 Ekspor & Sinkronisasi Data")
+    
+    # MEMBUAT TOMBOL BERDAMPINGAN
+    col_btn1, col_btn2 = st.columns(2)
+    
+    with col_btn1:
+        if st.button("🚀 KIRIM DATA KE SPREADSHEET", type="primary", use_container_width=True):
+            if not SHEET_URL:
+                st.error("⚠️ Link Spreadsheet belum diatur di Streamlit Secrets!")
+            else:
+                try:
+                    with st.spinner("Menghubungkan ke Google Server..."):
+                        scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+                        skey = st.secrets["gcp_service_account"]
+                        credentials = Credentials.from_service_account_info(skey, scopes=scopes)
+                        client = gspread.authorize(credentials)
                         
-                    if not ws_boiler.get_all_values():
-                        ws_boiler.append_row(df_boiler.columns.tolist())
-                    
-                    df_boiler_clean = df_boiler.fillna("").astype(str)
-                    ws_boiler.append_rows(df_boiler_clean.values.tolist())
-                    
-                    st.success("✅ BOOM! Data Laporan Utama dan Data Boilerplate berhasil ditambahkan ke Spreadsheet Anda!")
-            except Exception as e:
-                st.error(f"❌ Gagal mengirim: {e}. Pastikan Service Account email sudah di-invite sebagai Editor di Google Sheet Anda.")
+                        sheet = client.open_by_url(SHEET_URL)
+                        
+                        # 1. Kirim ke Laporan Utama
+                        try:
+                            ws_utama = sheet.worksheet("Laporan Utama")
+                        except gspread.exceptions.WorksheetNotFound:
+                            ws_utama = sheet.add_worksheet(title="Laporan Utama", rows="1000", cols="20")
+                        
+                        if not ws_utama.get_all_values():
+                            ws_utama.append_row(df_final.columns.tolist())
+                        
+                        df_final_clean = df_final.fillna("").astype(str)
+                        ws_utama.append_rows(df_final_clean.values.tolist())
+                        
+                        # 2. Kirim ke Data Boilerplate
+                        try:
+                            ws_boiler = sheet.worksheet("Data Boilerplate")
+                        except gspread.exceptions.WorksheetNotFound:
+                            ws_boiler = sheet.add_worksheet(title="Data Boilerplate", rows="1000", cols="10")
+                            
+                        if not ws_boiler.get_all_values():
+                            ws_boiler.append_row(df_boiler.columns.tolist())
+                        
+                        df_boiler_clean = df_boiler.fillna("").astype(str)
+                        ws_boiler.append_rows(df_boiler_clean.values.tolist())
+                        
+                        st.success("✅ BOOM! Data berhasil ditambahkan ke Spreadsheet Anda!")
+                except Exception as e:
+                    st.error(f"❌ Gagal mengirim: {e}. Pastikan Service Account email sudah di-invite sebagai Editor di Sheet Anda.")
+
+    with col_btn2:
+        st.download_button(
+            label="📥 DOWNLOAD HASIL (EXCEL)",
+            data=excel_data,
+            file_name="Hasil_Analisis_KAM.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="secondary",
+            use_container_width=True
+        )
 
     st.divider()
     
