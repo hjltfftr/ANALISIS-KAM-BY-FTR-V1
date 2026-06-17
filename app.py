@@ -93,6 +93,13 @@ def calculate_similarity(texts):
         return cosine_similarity(tfidf_matrix)
     except ValueError: return None
 
+# --- FUNGSI BARU: PEMBERSIH TEKS UNTUK MENGHEMAT TOKEN AI ---
+def clean_text_for_ai(text):
+    # Menghapus spasi berlebih dan baris kosong yang tidak berguna
+    text = re.sub(r'\s+', ' ', text)
+    # Membatasi jumlah karakter mentah agar tidak over-limit (opsional, maks 20.000 karakter)
+    return text.strip()[:20000]
+
 # --- FUNGSI GENERATE DENGAN AUTO-FALLBACK ---
 def generate_ai_with_fallback(prompt, gemini_key, groq_key):
     if not gemini_key and not groq_key:
@@ -110,13 +117,13 @@ def generate_ai_with_fallback(prompt, gemini_key, groq_key):
                 return f"❌ Error Gemini: {e} (Groq Key tidak tersedia untuk cadangan)"
             pass # Jika error limit, lanjut diam-diam ke Groq
 
-    # 2. Jika Gemini gagal, pakai Groq
+    # 2. Jika Gemini gagal, pakai Groq (Model 8B yang limitnya lebih longgar)
     if groq_key:
         try:
             client = Groq(api_key=groq_key)
             chat = client.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
-                model="llama-3.3-70b-versatile"
+                model="llama-3.1-8b-instant" # DIUBAH KE MODEL YANG LEBIH HEMAT DAN CEPAT
             )
             return chat.choices[0].message.content
         except Exception as e:
@@ -214,6 +221,10 @@ if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="
         with st.spinner("⏳ [3/4] AI sedang menyusun ringkasan (Mencoba Gemini, bersiap Groq)..."):
             summaries = {}
             for name, text in documents.items():
+                
+                # BERSIHKAN TEKS SEBELUM MASUK PROMPT
+                cleaned_text = clean_text_for_ai(text)
+                
                 prompt_summary = f"""
 Peran:
 Anda adalah gabungan Auditor Senior Big Four, Financial Statement Analyst, dan Equity Research Analyst.
@@ -312,14 +323,16 @@ Aturan:
 - Maksimal 900 kata.
 
 KAM:
-{text}
+{cleaned_text}
 """
                 summaries[name] = generate_ai_with_fallback(prompt_summary, GEMINI_KEY, GROQ_KEY)
                 time.sleep(2) 
             st.session_state['ai_summaries'] = summaries
             
-            combined_texts = ""
-            for name, text in documents.items(): combined_texts += f"\n\n### Dokumen: {name}\n{text}\n"
+            # MENGGABUNGKAN HASIL RINGKASAN (BUKAN PDF ASLI) UNTUK DIANALISIS
+            combined_summaries = ""
+            for name, summary in summaries.items(): 
+                combined_summaries += f"\n\n### Dokumen: {name}\n{summary}\n"
             
             prompt_comp = f"""
 Peran:
@@ -397,8 +410,8 @@ Aturan:
 - Prioritaskan insight daripada deskripsi.
 - Maksimal 1200 kata.
 
-Dokumen:
-{combined_texts}
+Dokumen Ringkasan:
+{combined_summaries}
 """
             st.session_state['ai_comparison'] = generate_ai_with_fallback(prompt_comp, GEMINI_KEY, GROQ_KEY)
 
