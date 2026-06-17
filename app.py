@@ -214,13 +214,106 @@ if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="
         with st.spinner("⏳ [3/4] AI sedang menyusun ringkasan (Mencoba Gemini, bersiap Groq)..."):
             summaries = {}
             for name, text in documents.items():
-                prompt_summary = f"""Anda adalah gabungan seorang Auditor Senior dan Analis Ekuitas Pasar Modal. Ekstrak Key Audit Matters (KAM) berikut dengan singkat dan tajam dengan total ringkasan maksimal 1500 kata:
-1. Fokus Audit & Alasan: (Apa yang disorot dan kenapa auditor menganggap ini krusial?)
-2. Respons Auditor: (Langkah apa yang dilakukan auditor?)
-3. Radar Risiko: (Secara fundamental, apa ancaman dari poin ini terhadap likuiditas, laba, atau kelangsungan usaha emiten?)
+                prompt_summary = f"""
+Peran:
+Anda adalah gabungan Auditor Senior Big Four, Financial Statement Analyst, dan Equity Research Analyst.
 
-Teks KAM:
-{text}"""
+Tugas:
+Lakukan ekstraksi menyeluruh terhadap Key Audit Matters (KAM) berikut.
+
+JANGAN membuat ringkasan terlalu pendek.
+JANGAN menghilangkan informasi penting.
+JANGAN mengutip ulang seluruh paragraf auditor.
+
+Fokus pada substansi yang dapat digunakan untuk analisis fundamental dan perbandingan antar tahun.
+
+Output wajib:
+
+# 1. Ringkasan Eksekutif
+Jelaskan:
+- Isu utama yang menjadi KAM
+- Mengapa auditor menganggap area ini signifikan
+- Mengapa investor perlu memperhatikan area ini
+
+# 2. Fokus Audit Utama
+Untuk setiap KAM:
+
+### Nama Area KAM
+- Akun/transaksi terkait
+- Risiko utama
+- Estimasi atau judgement manajemen
+- Faktor yang menyebabkan auditor memberi perhatian khusus
+
+# 3. Detail Respons Auditor
+Jelaskan secara ringkas namun lengkap:
+- Pengujian pengendalian internal
+- Pengujian substantif
+- Penggunaan spesialis
+- Pengujian asumsi
+- Prosedur konfirmasi
+- Rekalkulasi
+- Analisis data
+
+# 4. Sumber Risiko Fundamental
+
+### Risiko Pendapatan
+### Risiko Margin
+### Risiko Arus Kas
+### Risiko Likuiditas
+### Risiko Utang
+### Risiko Going Concern
+
+Untuk masing-masing:
+- Tingkat Risiko (Rendah/Sedang/Tinggi)
+- Alasan
+
+# 5. Indikator yang Harus Dipantau Investor
+
+Sebutkan indikator yang relevan:
+- Penjualan
+- Piutang
+- Persediaan
+- Capex
+- Utang
+- Arus kas
+- Impairment
+- Estimasi akuntansi
+
+# 6. Sinyal Pasar Modal
+
+### Investor Institusi
+
+### Smart Money
+
+### Investor Ritel
+
+### Potensi Reaksi Harga Saham
+
+# 7. Early Warning Signal
+
+Kelompokkan menjadi:
+- Risiko Operasional
+- Risiko Keuangan
+- Risiko Akuntansi
+- Risiko Tata Kelola
+
+# 8. Kesimpulan Akhir
+
+Berikan:
+- Tingkat Risiko Keseluruhan: Rendah / Sedang / Tinggi
+- Sentimen: Positif / Netral / Negatif
+- Alasan utama
+
+Aturan:
+- Fokus pada informasi material.
+- Hindari pengulangan.
+- Pertahankan seluruh informasi penting.
+- Buat output yang dapat digunakan langsung untuk analisis komparatif antar tahun.
+- Maksimal 900 kata.
+
+KAM:
+{text}
+"""
                 summaries[name] = generate_ai_with_fallback(prompt_summary, GEMINI_KEY, GROQ_KEY)
                 time.sleep(2) 
             st.session_state['ai_summaries'] = summaries
@@ -228,27 +321,85 @@ Teks KAM:
             combined_texts = ""
             for name, text in documents.items(): combined_texts += f"\n\n### Dokumen: {name}\n{text}\n"
             
-            prompt_comp = f"""Anda adalah pakar Gabungan (Auditor Senior & Analis Ekuitas Spesialis IHSG). Analisis komparatif dari kumpulan dokumen Key Audit Matters (KAM) berikut untuk mencari anomali fundamental yang bisa menggerakkan harga saham. 
+            prompt_comp = f"""
+Peran:
+Auditor Senior + Equity Strategist + Fund Manager IHSG.
 
-Gunakan format baku berikut:
+Analisis seluruh dokumen KAM berikut untuk menemukan perubahan risiko fundamental yang berpotensi memengaruhi harga saham.
 
-1. Persamaan:
-(Jelaskan isu apa saja yang sama/berulang antar dokumen. Apakah ini memang risiko wajar di sektornya, atau sekadar template/boilerplate dari tahun ke tahun?)
+Fokus hanya pada informasi yang material.
 
-2. Perbedaan Signifikan:
-(Jelaskan secara tajam perbedaan isi KAM antar dokumen atau antar tahun. Adakah akun spesifik, metodologi, atau peringatan auditor yang muncul di satu laporan tapi tidak ada di laporan lain?)
+Output:
 
-3. Dampak yang Mungkin Terjadi (Market Reaction):
-(Berikan analisis YoY/komparatif. Contoh: Karena laporan terbaru menyoroti masalah ini, sentimen pasar akan bergeser menjadi...)
+# Persamaan Utama
+- Risiko yang muncul berulang
+- Indikasi boilerplate atau tidak
+- Risiko yang memang lazim pada industri
 
-4. Informasi Penting Lainnya (Insight Pelaku Pasar):
-(Berikan peringatan spesifik dari temuan ini bagi:
-- Investor Institusi / Smart Money: Akumulasi atau Distribusi?
-- Ritel: Risiko jebakan psikologis/FOMO?
-- Bandar / Market Maker: Momen kerek harga atau buang barang?)
+# Perubahan Material
+Identifikasi:
+- Akun baru yang menjadi KAM
+- Akun yang hilang dari KAM
+- Peningkatan risiko
+- Penurunan risiko
+- Perubahan judgement manajemen
+- Perubahan prosedur audit
 
-Teks Dokumen:
-{combined_texts}"""
+# Skor Perubahan Risiko
+
+Berikan penilaian:
+- Risiko Laba
+- Risiko Arus Kas
+- Risiko Likuiditas
+- Risiko Solvabilitas
+- Risiko Going Concern
+
+Kategori:
+- Naik
+- Tetap
+- Turun
+
+# Implikasi Fundamental
+
+Analisis dampak potensial terhadap:
+- Pendapatan
+- Margin
+- Cash Flow
+- Utang
+- Kemampuan ekspansi
+
+# Market Reaction
+
+### Investor Institusi
+
+### Foreign Fund
+
+### Smart Money
+
+### Investor Ritel
+
+# Early Warning Signal
+
+Tuliskan poin-poin paling penting yang perlu diperhatikan investor pada laporan terbaru.
+
+# Kesimpulan Investasi
+
+Pilih salah satu:
+- Positif
+- Netral
+- Negatif
+
+Jelaskan alasan utama secara rinci.
+
+Aturan:
+- Jangan mengulang isi KAM.
+- Fokus pada perubahan dan implikasinya.
+- Prioritaskan insight daripada deskripsi.
+- Maksimal 1200 kata.
+
+Dokumen:
+{combined_texts}
+"""
             st.session_state['ai_comparison'] = generate_ai_with_fallback(prompt_comp, GEMINI_KEY, GROQ_KEY)
 
         with st.spinner("⏳ [4/4] Menyusun memori data..."):
