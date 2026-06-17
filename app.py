@@ -23,16 +23,17 @@ st.set_page_config(page_title="KAM Analyzer Pro (Auto-Fallback)", layout="wide",
 st.title("🚀 KAM Analyzer Pro (Auto-Fallback AI)")
 st.markdown("Unggah dokumen KAM Anda. Sistem otomatis menggunakan **Gemini** terlebih dahulu, dan akan berpindah ke **Groq** jika terkena limit.")
 
-# --- SIDEBAR: PENGATURAN API KEY MANUAL ---
-with st.sidebar:
-    st.header("⚙️ Pengaturan API Key")
-    st.write("Masukkan Key Anda di bawah ini:")
-    gemini_key_input = st.text_input("🔑 API Key Google Gemini (Utama)", type="password")
-    groq_key_input = st.text_input("🔑 API Key Groq (Cadangan)", type="password")
-    
-    st.info("💡 Sistem akan mencoba Gemini dulu. Jika limit (Error 429), otomatis pindah pakai Llama-3 (Groq).")
+# --- MENGAMBIL API KEY & URL DARI SECRETS ---
+try:
+    GEMINI_KEY = st.secrets["GEMINI_API_KEY"]
+except KeyError:
+    GEMINI_KEY = None
 
-# --- MENGAMBIL URL DARI SECRETS (HANYA UNTUK SPREADSHEET) ---
+try:
+    GROQ_KEY = st.secrets["GROQ_API_KEY"]
+except KeyError:
+    GROQ_KEY = None
+
 try:
     SHEET_URL = st.secrets["SPREADSHEET_URL"]
 except KeyError:
@@ -95,7 +96,7 @@ def calculate_similarity(texts):
 # --- FUNGSI GENERATE DENGAN AUTO-FALLBACK ---
 def generate_ai_with_fallback(prompt, gemini_key, groq_key):
     if not gemini_key and not groq_key:
-        return "⚠️ Error: Anda belum memasukkan API Key sama sekali."
+        return "⚠️ Error: Konfigurasi API Key di Secrets belum ditemukan."
     
     # 1. Coba pakai Google Gemini terlebih dahulu
     if gemini_key:
@@ -105,13 +106,11 @@ def generate_ai_with_fallback(prompt, gemini_key, groq_key):
             return model.generate_content(prompt).text
         except Exception as e:
             error_msg = str(e).lower()
-            # Jika tidak ada key Groq, kembalikan error Gemini
             if not groq_key:
-                return f"❌ Error Gemini: {e} (Groq Key tidak diisi untuk cadangan)"
-            # Jika error (termasuk 429 Quota), diam-diam lanjut ke blok Groq di bawah
-            pass
+                return f"❌ Error Gemini: {e} (Groq Key tidak tersedia untuk cadangan)"
+            pass # Jika error limit, lanjut diam-diam ke Groq
 
-    # 2. Jika Gemini gagal (atau tidak diisi), pakai Groq
+    # 2. Jika Gemini gagal, pakai Groq
     if groq_key:
         try:
             client = Groq(api_key=groq_key)
@@ -143,15 +142,17 @@ if 'is_processed' not in st.session_state:
 # --- AREA INPUT ---
 st.header("1. Persiapan Data")
 
+if not GEMINI_KEY and not GROQ_KEY:
+    st.error("⚠️ **API Key belum diatur di Secrets!** Analisis AI tidak akan berjalan.")
 if not SHEET_URL:
-    st.warning("⚠️ **Link Spreadsheet belum diatur di Secrets!** Fitur sinkronisasi otomatis tidak akan berfungsi penuh.")
+    st.warning("⚠️ **Link Spreadsheet belum diatur di Secrets!** Fitur sinkronisasi otomatis tidak akan berfungsi.")
 
 uploaded_files = st.file_uploader("📂 Pilih Dokumen PDF (Contoh: ACES 2023.pdf)", type=['pdf'], accept_multiple_files=True)
 
 # --- TOMBOL EKSEKUSI ---
 if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="primary"):
-    if not gemini_key_input and not groq_key_input:
-        st.error("⚠️ Proses dihentikan. Masukkan minimal satu API Key (Gemini atau Groq) di menu sebelah kiri.")
+    if not GEMINI_KEY and not GROQ_KEY:
+        st.error("⚠️ Proses dihentikan. Atur API Key di Streamlit Secrets terlebih dahulu.")
     elif not uploaded_files or len(uploaded_files) < 2:
         st.error("⚠️ Mohon unggah minimal 2 dokumen untuk analisis perbandingan.")
     else:
@@ -210,7 +211,7 @@ if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="
             st.session_state['boilerplate_insights'] = "\n".join(boilerplate_insights)
             st.session_state['df_boilerplate_db'] = pd.DataFrame(boilerplate_db)
 
-        with st.spinner(f"⏳ [3/4] AI sedang menyusun ringkasan (Mencoba Gemini, bersiap Groq)..."):
+        with st.spinner("⏳ [3/4] AI sedang menyusun ringkasan (Mencoba Gemini, bersiap Groq)..."):
             summaries = {}
             for name, text in documents.items():
                 prompt_summary = f"""Anda adalah gabungan seorang Auditor Senior dan Analis Ekuitas Pasar Modal. Ekstrak Key Audit Matters (KAM) berikut dengan singkat dan tajam:
@@ -220,8 +221,8 @@ if st.button("⚡ PROSES SELURUH ANALISIS ⚡", use_container_width=True, type="
 
 Teks KAM:
 {text}"""
-                summaries[name] = generate_ai_with_fallback(prompt_summary, gemini_key_input, groq_key_input)
-                time.sleep(2) # Jeda aman
+                summaries[name] = generate_ai_with_fallback(prompt_summary, GEMINI_KEY, GROQ_KEY)
+                time.sleep(2) 
             st.session_state['ai_summaries'] = summaries
             
             combined_texts = ""
@@ -248,7 +249,7 @@ Gunakan format baku berikut:
 
 Teks Dokumen:
 {combined_texts}"""
-            st.session_state['ai_comparison'] = generate_ai_with_fallback(prompt_comp, gemini_key_input, groq_key_input)
+            st.session_state['ai_comparison'] = generate_ai_with_fallback(prompt_comp, GEMINI_KEY, GROQ_KEY)
 
         with st.spinner("⏳ [4/4] Menyusun memori data..."):
             st.session_state['is_processed'] = True
@@ -257,7 +258,6 @@ Teks Dokumen:
 if st.session_state['is_processed']:
     st.success("✅ Analisis Berhasil!")
     
-    # PERSIAPAN DATAFRAME FINAL
     df_final = st.session_state['df_readability'].copy()
     df_final['AI Summary'] = df_final['Filename Asli'].map(st.session_state['ai_summaries'])
     df_final['Interpretasi Boilerplate (Keseluruhan)'] = ""
@@ -267,7 +267,6 @@ if st.session_state['is_processed']:
     
     df_boiler = st.session_state['df_boilerplate_db'].copy()
 
-    # --- MEMBUAT FILE EXCEL DI MEMORI UNTUK DOWNLOAD ---
     output_excel = io.BytesIO()
     with pd.ExcelWriter(output_excel, engine='openpyxl') as writer: 
         df_final.to_excel(writer, index=False, sheet_name='Laporan Utama')
@@ -293,7 +292,6 @@ if st.session_state['is_processed']:
                         
                         sheet = client.open_by_url(SHEET_URL)
                         
-                        # 1. Kirim ke Laporan Utama
                         try:
                             ws_utama = sheet.worksheet("Laporan Utama")
                         except gspread.exceptions.WorksheetNotFound:
@@ -305,7 +303,6 @@ if st.session_state['is_processed']:
                         df_final_clean = df_final.fillna("").astype(str)
                         ws_utama.append_rows(df_final_clean.values.tolist())
                         
-                        # 2. Kirim ke Data Boilerplate
                         try:
                             ws_boiler = sheet.worksheet("Data Boilerplate")
                         except gspread.exceptions.WorksheetNotFound:
