@@ -332,22 +332,31 @@ KAM:
             
             # --- MENYUSUN DATA PERBANDINGAN SECARA KRONOLOGIS ---
             combined_summaries = ""
+            daftar_tahun = [] # Menyimpan list tahun yang terdeteksi
+            
             for name, summary in summaries.items(): 
                 emiten_name, tahun_doc = parse_filename(name)
+                if tahun_doc != "-": daftar_tahun.append(tahun_doc)
+                
                 combined_summaries += f"\n\n=========================================\n"
                 combined_summaries += f"DATA KAM UNTUK EMITEN: {emiten_name}\n"
                 combined_summaries += f"TAHUN BUKU / PERIODE: {tahun_doc}\n"
                 combined_summaries += f"=========================================\n"
                 combined_summaries += f"{summary}\n"
             
+            # Mengurutkan tahun agar berurutan (misal: 2022, 2023, 2024)
+            tahun_terdeteksi = ", ".join(sorted(list(set(daftar_tahun)))) if daftar_tahun else "Semua Tahun Terlampir"
+            
             prompt_comp = f"""
 Peran:
 Auditor Senior + Equity Strategist + Fund Manager IHSG.
 
 Tugas:
-Analisis dan bandingkan seluruh data Ringkasan KAM yang tersedia di bawah ini secara kronologis (tahun demi tahun) untuk menemukan perubahan tren risiko fundamental yang berpotensi memengaruhi harga saham. 
+Analisis dan bandingkan seluruh data Ringkasan KAM yang tersedia di bawah ini secara kronologis.
 
-*Catatan: Anda harus menganalisis semua tahun/dokumen yang dilampirkan secara komprehensif, baik itu berjumlah 2 dokumen, 3 dokumen, atau lebih.*
+!!! INSTRUKSI SUPER KETAT !!!
+Data yang dilampirkan mencakup tahun: **{tahun_terdeteksi}**. 
+Anda WAJIB menganalisis, menyebutkan, dan membandingkan MASING-MASING TAHUN TERSEBUT secara eksplisit. Jangan melompati atau menggabungkan tahun manapun.
 
 Fokus hanya pada informasi yang material.
 
@@ -359,17 +368,14 @@ Output:
 - Risiko yang memang lazim pada industri tersebut
 
 # Perubahan Material & Tren Tahunan
-Identifikasi perkembangan dari tahun terlama hingga tahun terbaru:
-- Akun baru yang menjadi KAM di tahun tertentu
+Jabarkan temuan Anda wajib untuk SETIAP TAHUN ({tahun_terdeteksi}):
+- Akun baru yang menjadi KAM
 - Akun yang berhasil dihilangkan dari KAM
-- Peningkatan intensitas risiko antar tahun
-- Penurunan intensitas risiko antar tahun
-- Perubahan judgement manajemen dari periode ke periode
-- Perubahan prosedur audit yang dilakukan oleh auditor
+- Peningkatan / penurunan intensitas risiko
+- Perubahan judgement manajemen & prosedur audit
 
 # Skor Perubahan Risiko (Matriks Tren)
-
-Berikan penilaian perbandingan arah risiko (misal: Tahun A ke Tahun B ke Tahun C):
+Buat perbandingan wajib untuk tahun ({tahun_terdeteksi}):
 - Risiko Laba: (Naik / Tetap / Turun)
 - Risiko Arus Kas: (Naik / Tetap / Turun)
 - Risiko Likuiditas: (Naik / Tetap / Turun)
@@ -377,8 +383,7 @@ Berikan penilaian perbandingan arah risiko (misal: Tahun A ke Tahun B ke Tahun C
 - Risiko Going Concern: (Naik / Tetap / Turun)
 
 # Implikasi Fundamental
-
-Analisis dampak potensial perkembangan risiko ini terhadap target kinerja masa depan:
+Analisis dampak potensial perkembangan risiko ini terhadap:
 - Pendapatan
 - Margin
 - Cash Flow
@@ -386,31 +391,20 @@ Analisis dampak potensial perkembangan risiko ini terhadap target kinerja masa d
 - Kemampuan ekspansi
 
 # Market Reaction
-
 ### Investor Institusi
-
 ### Foreign Fund
-
 ### Smart Money
-
 ### Investor Ritel
 
 # Early Warning Signal
-
-Tuliskan poin-poin paling penting yang paling krusial bagi investor berdasarkan tren data laporan keuangan terbaru.
+Tuliskan poin-poin paling penting yang paling krusial bagi investor berdasarkan tren dari tahun ke tahun tersebut.
 
 # Kesimpulan Investasi & Outlook
-
-Pilih salah satu:
-- Positif
-- Netral
-- Negatif
-
-Jelaskan argumentasi utama Anda secara rinci berdasarkan pergeseran risiko dari tahun ke tahun.
+Pilih salah satu: Positif / Netral / Negatif.
+Jelaskan argumentasi utama Anda secara rinci berdasarkan pergeseran risiko dari tahun terlama hingga terbaru.
 
 Aturan:
-- Jangan mengulang isi KAM secara mentah. Fokuslah pada dinamika perubahan dan implikasinya.
-- Prioritaskan komparasi kronologis dan insight yang actionable bagi pengelola dana / investor.
+- Jangan mengulang isi KAM secara mentah.
 - Maksimal 1200 kata.
 
 Dokumen Ringkasan Berdasarkan Tahun dan Emiten:
